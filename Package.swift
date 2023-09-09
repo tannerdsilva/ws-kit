@@ -15,7 +15,7 @@ let package = Package(
 		Package.Dependency.package(url:"https://github.com/apple/swift-nio.git", from:"2.57.0"),
 		Package.Dependency.package(url:"https://github.com/apple/swift-nio-ssl.git", from:"2.24.0"),
 		Package.Dependency.package(url:"https://github.com/apple/swift-log.git", from:"1.0.0"),
-		Package.Dependency.package(url:"https://github.com/apple/swift-crypto.git", from:"2.5.0"),
+		// Package.Dependency.package(url:"https://github.com/apple/swift-crypto.git", from:"2.5.0"),
 	],
     targets: [
 		.target(name:"cweb"),
@@ -26,7 +26,7 @@ let package = Package(
 				.product(name:"NIO", package:"swift-nio"),
 				.product(name:"NIOWebSocket", package:"swift-nio"),
 				.product(name:"Logging", package:"swift-log"),
-				.product(name:"Crypto", package:"swift-crypto"),
+				// .product(name:"Crypto", package:"swift-crypto"),
 				"cweb",
 			]),
 		.target(name:"WebSocketCore", dependencies:["WebCore"])
