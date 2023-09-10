@@ -58,16 +58,12 @@ extension Client {
 	}
 
 	/// bootstrap a websocket connection	
-	public static func setupChannelForWebSockets(log:Logger, splitURL:URL.Split, headers:HTTPHeaders, channel:Channel, wsPromise:EventLoopPromise<Void>, on eventLoop:EventLoop, wsUpgradeTimeout:TimeAmount, healthyTimeout:TimeAmount, maxMessageSize:size_t, maxFrameSize:size_t) -> EventLoopFuture<Void> {
+	public static func setupChannelForWebSocketClient(log:Logger, splitURL:URL.Split, handlers:[NIOCore.ChannelHandler], headers:HTTPHeaders, channel:Channel, wsPromise:EventLoopPromise<Void>, on eventLoop:EventLoop, wsUpgradeTimeout:TimeAmount, healthyTimeout:TimeAmount, maxMessageSize:size_t, maxFrameSize:size_t) -> EventLoopFuture<Void> {
 		
-		// this is the promise of the HTTP to WebSocket upgrade. if the connection upgrades, this succeeds. if it fails, the failure is passed.
-		let upgradePromise = eventLoop.makePromise(of: Void.self)
-		upgradePromise.futureResult.cascadeFailure(to:wsPromise)
-
 		// light up the timeout task.
 		let timeoutTask = channel.eventLoop.scheduleTask(in:wsUpgradeTimeout) {
 			// the timeout task fired. fail the upgrade promise.
-			upgradePromise.fail(Error.WebSocket.UpgradeError.upgradeTimedOut)
+			wsPromise.fail(Error.WebSocket.UpgradeError.upgradeTimedOut)
 		}
 
 		// create a random key for the upgrade request
@@ -77,27 +73,52 @@ extension Client {
 			base64Key = try Base64.encode(bytes:requestKey)
 		} catch let error {
 			// the key could not be encoded. fail the upgrade promise.
-			upgradePromise.fail(error)
+			wsPromise.fail(error)
 			return channel.eventLoop.makeFailedFuture(error)
 		}
 
-		// build the initial request writer.
-		let initialRequestWriter = InitialHTTPRequestWriter(log:log, url:splitURL, headers:headers, upgradePromise:upgradePromise)
-		
+		let requestEncoder = HTTPRequestEncoder()
+        let responseDecoder = HTTPResponseDecoder(leftOverBytesStrategy:.forwardBytes)
+		let initialRequestWriter = InitialHTTPRequestWriter(log:log, url:splitURL, headers:headers, upgradePromise:wsPromise)
+        var hndlers: [RemovableChannelHandler] = [requestEncoder, ByteToMessageHandler(responseDecoder)]
+
 		// build the websocket handler.
 		let webSocketHandler = Handler(log:log, surl:splitURL, maxMessageSize:maxMessageSize, maxFrameSize:maxFrameSize, healthyConnectionThreshold:healthyTimeout)
+		var buildHandlers:[NIOCore.ChannelHandler] = [webSocketHandler];
+		buildHandlers.append(contentsOf:handlers)
 
 		// build the websocket upgrader.
-		let websocketUpgrader = HTTPToWebSocketUpgrader(log:log, surl:splitURL, requestKey:base64Key, maxWebSocketFrameSize:maxFrameSize, upgradePromise:upgradePromise, removeHandler:initialRequestWriter, handlers:[webSocketHandler])
-
-		let config = NIOHTTPClientUpgradeConfiguration(upgraders:[websocketUpgrader], completionHandler: { context in
+		let websocketUpgrader = HTTPToWebSocketUpgrader(log:log, surl:splitURL, requestKey:base64Key, maxWebSocketFrameSize:maxFrameSize, upgradePromise:wsPromise, handlers:buildHandlers)
+		let newupg = NIOHTTPClientUpgradeHandler(upgraders:[websocketUpgrader], httpHandlers:hndlers, upgradeCompletionHandler: { context in
 			timeoutTask.cancel()
 		})
 
+		// add the upgrade handler to the pipeline.
+		hndlers.append(newupg)
+		hndlers.append(initialRequestWriter)
+
 		// add the upgrade and initial request write handlers.
-		return channel.pipeline.addHTTPClientHandlers(leftOverBytesStrategy:.forwardBytes, withClientUpgrade:config).flatMap {
-			// the HTTP client handlers were added. now add the initial request writer.
-			channel.pipeline.addHandler(initialRequestWriter)
+		return channel.pipeline.addHandlers(hndlers)
+	}
+
+	public static func connect(log:Logger, url:URL, headers:HTTPHeaders = [:], configuration:Configuration, on eventLoop:EventLoop, handlers:[NIOCore.ChannelHandler]) -> EventLoopFuture<Void> {
+		guard let splitURL = URL.Split(url:url) else {
+			return eventLoop.makeFailedFuture(Error.invalidURL(url))
 		}
+		let promise = eventLoop.makePromise(of:Void.self)
+		do {
+			let bootstrap = try self.bootstrap(url:splitURL, headers:headers, configuration:configuration, on:eventLoop, logger:nil)
+				.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
+				.channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value:1)
+				.channelInitializer({ channel in
+					self.setupChannelForWebSocketClient(log:log, splitURL:splitURL, handlers:handlers, headers:headers, channel:channel, wsPromise:promise, on:eventLoop, wsUpgradeTimeout:configuration.timeouts.websocketUpgradeTimeout, healthyTimeout:configuration.timeouts.healthyConnectionTimeout, maxMessageSize:configuration.limits.maxMessageSize, maxFrameSize:configuration.limits.maxIndividualWebSocketFrameSize)
+				})
+				.connectTimeout(configuration.timeouts.tcpConnectionTimeout)
+			bootstrap.connect(host:splitURL.host, port:Int(splitURL.port)).cascadeFailure(to:promise)
+		} catch let error {
+			promise.fail(error)
+		}
+		return promise.futureResult
 	}
 }
+

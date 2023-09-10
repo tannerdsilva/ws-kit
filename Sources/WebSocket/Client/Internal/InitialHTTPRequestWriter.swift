@@ -7,8 +7,7 @@ extension WebSocket.Client {
 	
 	/// writes the initial HTTP request to the channel. this is a channel handler that is designed to be removed after the request is written.
 	internal final class InitialHTTPRequestWriter:ChannelInboundHandler, RemovableChannelHandler {
-		
-		typealias InboundIn = HTTPClientResponsePart
+		typealias InboundIn = Never
 		typealias OutboundOut = HTTPClientRequestPart
 
 		/// the logger for this handler to use when logging messages.
@@ -43,17 +42,19 @@ extension WebSocket.Client {
 			context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise:promise)
 			promise.futureResult.whenSuccess { [logFac = self.logger] in
 				logFac.debug("wrote initial HTTP upgrade request.")
+				// context.pipeline.removeHandler(self, promise:nil)
 			}
-			promise.futureResult.whenFailure { [ugp = self.upgradePromise, logFac = self.logger] error in
-				logFac.error("failed to write initial HTTP upgrade request. '\(error)'")
-				ugp.fail(Error.WebSocket.UpgradeError.failedToWriteInitialRequest(error))
-			}
+		}
+
+		internal func channelInactive(context:ChannelHandlerContext) {
+			self.logger.debug("channel became inactive")
 		}
 
 		/// close the channel if there is an issue.
 		internal func errorCaught(context:ChannelHandlerContext, error:Error) {
-			self.logger.error("error caught in initial HTTP request writer. '\(error)'")
+			self.logger.critical("error caught in initial HTTP request writer. '\(error)'")
 			self.upgradePromise.fail(error)
+			context.close(promise:nil)
 		}
 	}
 }

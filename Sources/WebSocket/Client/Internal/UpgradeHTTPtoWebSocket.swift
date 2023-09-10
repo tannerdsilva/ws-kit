@@ -45,17 +45,14 @@ extension WebSocket.Client {
 		private let maxWebSocketFrameSize: Int
 		/// called once the upgrade was successful or unsuccessful.
 		private let upgradePromise:EventLoopPromise<Void>
-		/// the channel handler that will be removed from the channel as soon as the upgrade is successful.
-		private let removeHandler:RemovableChannelHandler
 		/// called once the upgrade was successful. This is the owners opportunity to add any needed handlers to the channel pipeline.
 		private let handlers:[NIOCore.ChannelHandler]
 
-		internal init(log:Logger, surl:URL.Split, requestKey:String, maxWebSocketFrameSize:Int, upgradePromise:EventLoopPromise<Void>, removeHandler:RemovableChannelHandler, handlers:[NIOCore.ChannelHandler]) {
+		internal init(log:Logger, surl:URL.Split, requestKey:String, maxWebSocketFrameSize:Int, upgradePromise:EventLoopPromise<Void>, handlers:[NIOCore.ChannelHandler]) {
 			self.surl = surl
 			self.requestKey = requestKey
 			self.maxWebSocketFrameSize = maxWebSocketFrameSize
 			self.upgradePromise = upgradePromise
-			self.removeHandler = removeHandler
 			self.handlers = handlers
 			var modLog = log
 			modLog[metadataKey: "url"] = "\(surl.host)\(surl.pathQuery)"
@@ -70,7 +67,7 @@ extension WebSocket.Client {
 			// RFC 6455 requires this to be case-insensitively compared. However, many server sockets check explicitly for == "Upgrade", and SwiftNIO will (by default) send a header that is "upgrade" if not for this custom implementation with the NIOHTTPProtocolUpgrader protocol.
 			upgradeRequestHeaders.replaceOrAdd(name: "Connection", value: "Upgrade")
 			upgradeRequestHeaders.replaceOrAdd(name: "Upgrade", value: "websocket")
-			upgradeRequestHeaders.replaceOrAdd(name: "Host", value: "\(surl.host):\(surl.port)")
+			upgradeRequestHeaders.replaceOrAdd(name: "Host", value: self.surl.host)
 			self.logger.trace("applied upgrade-specific HTTP headers to outbound request. final request containing \(initialHeaderValues) headers.")
 		}
 		
@@ -83,6 +80,7 @@ extension WebSocket.Client {
 		/// - if the upgrade is allowed, the `upgradePromise` is NOT fulfilled in this code.
 		/// - if the upgrade is denied, the `upgradePromise` is filfilled with a FAILURE in this code.
 		private func _shouldAllowUpgrade(upgradeResponse:HTTPResponseHead) -> Bool {
+			self.logger.trace("evaluating response to HTTP upgrade request...")
 			// determine a basic path forward based on the HTTP response status code
 			switch upgradeResponse.status {
 				case .movedPermanently, .found, .seeOther, .notModified, .useProxy, .temporaryRedirect, .permanentRedirect:
@@ -136,7 +134,6 @@ extension WebSocket.Client {
 
 		/// called when the upgrade response has been flushed and it is safe to mutate the channel pipeline. Adds channel handlers for websocket frame encoding, decoding and errors.
 		internal func upgrade(context:ChannelHandlerContext, upgradeResponse:HTTPResponseHead) -> EventLoopFuture<Void> {
-			context.pipeline.removeHandler(self.removeHandler, promise:nil)
 			var useHandlers:[NIOCore.ChannelHandler] = [WebSocketFrameEncoder(), ByteToMessageHandler(WebSocketFrameDecoder(maxFrameSize:self.maxWebSocketFrameSize))]
 			useHandlers.append(contentsOf: self.handlers)
 			context.pipeline.addHandlers(useHandlers).cascade(to:self.upgradePromise)

@@ -1,4 +1,5 @@
 import cweb
+import RAW
 
 public struct Base64 {
 	/// error thrown by Base64 encoding/decoding functions
@@ -13,27 +14,32 @@ public struct Base64 {
 	/// encode a byte array to a base64 string
 	/// - parameter bytes: the byte array to encode
 	public static func encode(bytes:[UInt8]) throws -> String {
-		let newLength = base64_encoded_length(bytes.count)
-		let encodedBytes = try Array<UInt8>(unsafeUninitializedCapacity:newLength, initializingWith: { bytePtr, byteLength in
-			let decResult = base64_encode(bytePtr.baseAddress, newLength, bytes, bytes.count)
-			guard decResult >= 0 else {
-				throw Error.encodingError(bytes, geterrno())
-			}
+		let enclen = base64_encoded_length(bytes.count) + 1
+		let newBytes = malloc(enclen)
+		defer {
+			free(newBytes)
+		}
+		let encodedLength = bytes.asRAW_val({ rv in
+			base64_encode(newBytes, enclen, rv.mv_data, bytes.count)
 		})
-		return String(cString:encodedBytes)
+		assert(encodedLength >= 0)
+		return String(cString:newBytes!.assumingMemoryBound(to:Int8.self))
 	}
 	
 	/// decode a base64 string to a byte array
 	/// - parameter dataEncoding: the base64 string to decode
 	public static func decode(_ dataEncoding:String) throws -> [UInt8] {
-		let newLength = base64_decoded_length(dataEncoding.count)
-		let encodedBytes = Array<UInt8>(dataEncoding.utf8)
-		let decodedBytes = try Array<UInt8>(unsafeUninitializedCapacity:newLength, initializingWith: { bytePtr, byteLength in
-			let decResult = base64_decode(bytePtr.baseAddress, newLength, encodedBytes, encodedBytes.count)
-			guard decResult >= 0 else {
-				throw Error.decodingError(dataEncoding, geterrno())
-			}
+		let newBytes = malloc(base64_decoded_length(dataEncoding.count))
+		defer {
+			free(newBytes)
+		}
+		let decodeResult = base64_decode(newBytes, base64_decoded_length(dataEncoding.count), dataEncoding, dataEncoding.count)
+		guard decodeResult >= 0 else {
+			fatalError("could not decode base64 string")
+		}
+		return Array(unsafeUninitializedCapacity:decodeResult, initializingWith: { (buffer, count) in
+			memcpy(buffer.baseAddress!, newBytes, decodeResult)
+			count = decodeResult
 		})
-		return decodedBytes
 	}
 }
