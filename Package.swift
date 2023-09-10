@@ -5,6 +5,9 @@ import PackageDescription
 
 let package = Package(
     name: "ws-kit",
+	platforms: [
+		.macOS(.v10_15),
+	],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
@@ -12,10 +15,10 @@ let package = Package(
             targets: ["WebCore"]),
     ],
 	dependencies: [
-		Package.Dependency.package(url:"https://github.com/apple/swift-nio.git", from:"2.57.0"),
-		Package.Dependency.package(url:"https://github.com/apple/swift-nio-ssl.git", from:"2.24.0"),
+		Package.Dependency.package(url:"https://github.com/apple/swift-nio.git", from:"2.58.0"),
+		Package.Dependency.package(url:"https://github.com/apple/swift-nio-ssl.git", from:"2.25.0"),
 		Package.Dependency.package(url:"https://github.com/apple/swift-log.git", from:"1.0.0"),
-		// Package.Dependency.package(url:"https://github.com/apple/swift-crypto.git", from:"2.5.0"),
+		Package.Dependency.package(url:"https://github.com/swift-server/swift-service-lifecycle.git", from:"2.0.0")
 	],
     targets: [
 		.target(name:"cweb"),
@@ -26,10 +29,22 @@ let package = Package(
 				.product(name:"NIO", package:"swift-nio"),
 				.product(name:"NIOWebSocket", package:"swift-nio"),
 				.product(name:"Logging", package:"swift-log"),
-				// .product(name:"Crypto", package:"swift-crypto"),
+				.product(name:"ServiceLifecycle", package:"swift-service-lifecycle"),
 				"cweb",
-			]),
-		.target(name:"WebSocketCore", dependencies:["WebCore"])
+			]
+		),
+		.target(
+			name:"WebSocket",
+			dependencies: [
+				"WebCore",
+				"cweb",
+				.product(name:"NIOSSL", package:"swift-nio-ssl"),
+				.product(name:"NIO", package:"swift-nio"),
+				.product(name:"NIOWebSocket", package:"swift-nio"),
+				.product(name:"Logging", package:"swift-log"),
+				.product(name:"ServiceLifecycle", package:"swift-service-lifecycle"),
+			]
+		)
 
     ]
 )

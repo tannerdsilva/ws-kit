@@ -27,7 +27,7 @@ public enum Error:Swift.Error {
 
 				/// continued data was received from the remote peer, but the continued data fragments were not of the same type as the initial data fragment.
 				/// - NOTE: see RFC 6455 section 5.4 for more information.
-				case steamOpcodeMismatch(WebSocketOpcode, WebSocketOpcode)
+				case streamOpcodeMismatch(WebSocketOpcode, WebSocketOpcode)
 
 				/// a continued frame was received from the remote peer, but there was no previous frame to continue.
 				/// - NOTE: see RFC 6455 section 5.4 for more information.
@@ -60,6 +60,15 @@ public enum Error:Swift.Error {
 		/// - argument: contains the underlying error that caused the failure.
 		case failedToWriteInitialPing(Swift.Error)
 
+		/// thrown when a websocket handles an opcode that it does not know how to handle.
+		case opcodeNotSupported(WebSocketOpcode)
+
+		/// thrown when trying to handle a message that is larger than the configured maximum message size.
+		case messageTooLarge
+
+		/// thrown when a critical failure prevents the ping pong loop from continuing as expected.
+		case pingPongCriticalFailure
+
 		/// thrown when a TCP connection fails to upgrade to a websocket connection.
 		public enum UpgradeError:Swift.Error {
 			/// a tcp connection was successfully created to the remote peer, however, the HTTP request to upgrade to websockets protocol failed to be written to the remote peer.
@@ -83,11 +92,6 @@ public enum Error:Swift.Error {
 	case invalidURL(URL)
 
 	case connectionBootstrapError
-
-	case noAuthenticationKey
-
-	/// this is thrown when a NIP-42 AUTH assertion is found when the Relay is being used in a client context
-	case authenticationAssertionFound
 }
 
 /// default HTTP error. provides an HTTP status and a message is so desired

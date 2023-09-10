@@ -15,6 +15,10 @@ extension URL {
 			case invalidUTF8
 		}
 
+		private var buffer:[UInt8]
+		private var index:Int
+		private let range:Range<Int>
+
 		/// create a Parser object
 		/// - parameter string: UTF8 data to parse
 		/// - parameter validateUTF8: should we validate the UTF8 data
@@ -51,10 +55,6 @@ extension URL {
 		public var string: String {
 			return makeString(self.buffer[self.range])
 		}
-
-		private var buffer: [UInt8]
-		private var index: Int
-		private let range: Range<Int>
 	}
 }
 

@@ -7,17 +7,12 @@ import NIOWebSocket
 import WebCore
 import Logging
 
-import Crypto
-
 fileprivate let magicWebSocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 extension WebSocket.Client {
 
 	/// this is the class that is used to upgrade the HTTP connection to a WebSocket connection.
 	internal final class HTTPToWebSocketUpgrader:NIOHTTPClientProtocolUpgrader {
-		#if DEBUG
-		internal let logger:Logger
-		#endif
 
 		/// errors that may be throwin into an instance's `upgradePromise
 		internal enum Error:Swift.Error {
@@ -33,6 +28,8 @@ extension WebSocket.Client {
 			case requestRedirected(String)
 		}
 
+		internal let logger:Logger
+
 		/// required for NIOHTTPClientProtocolUpgrader - defines the protocol that this upgrader supports.
 		internal let supportedProtocol: String = "websocket"
 
@@ -43,49 +40,38 @@ extension WebSocket.Client {
 		/// the split url that this channel is connected to
 		private let surl:URL.Split
 		/// request key to be assigned to the `Sec-WebSocket-Key` HTTP header.
-		private let requestKey: String
+		private let requestKey:String
 		/// largest incoming `WebSocketFrame` size in bytes. This is used to set the `maxFrameSize` on the `WebSocket` channel handler upon a successful upgrade.
 		private let maxWebSocketFrameSize: Int
-		/// if true, adds `WebSocketProtocolErrorHandler` to the channel pipeline to catch and respond to WebSocket protocol errors.
-		private let automaticErrorHandling: Bool
 		/// called once the upgrade was successful or unsuccessful.
 		private let upgradePromise:EventLoopPromise<Void>
+		/// the channel handler that will be removed from the channel as soon as the upgrade is successful.
+		private let removeHandler:RemovableChannelHandler
 		/// called once the upgrade was successful. This is the owners opportunity to add any needed handlers to the channel pipeline.
-		private let upgradeInitiator:(Channel, HTTPResponseHead) -> EventLoopFuture<Void>
+		private let handlers:[NIOCore.ChannelHandler]
 
-		/// - parameters:
-		///   - host: sent to the server in the `Host` HTTP header. default value is "localhost".
-		///   - requestKey: sent to the server in the `Sec-WebSocket-Key` HTTP header. Default is random request key.
-		///   - maxWebSocketFrameSize: largest incoming `WebSocketFrame` size in bytes.
-		///   - automaticErrorHandling: If true, adds `WebSocketProtocolErrorHandler` to the channel pipeline to catch and respond to WebSocket protocol errors. Default is true.
-		///   - upgradePipelineHandler: called once the upgrade was successful
-		internal init(surl:URL.Split, url:URL, requestKey:String, maxWebSocketFrameSize:Int, automaticErrorHandling: Bool = true, upgradePromise:EventLoopPromise<Void>, upgradeInitiator: @escaping (Channel, HTTPResponseHead) -> EventLoopFuture<Void>) {
+		internal init(log:Logger, surl:URL.Split, requestKey:String, maxWebSocketFrameSize:Int, upgradePromise:EventLoopPromise<Void>, removeHandler:RemovableChannelHandler, handlers:[NIOCore.ChannelHandler]) {
 			self.surl = surl
 			self.requestKey = requestKey
 			self.maxWebSocketFrameSize = maxWebSocketFrameSize
-			self.automaticErrorHandling = automaticErrorHandling
 			self.upgradePromise = upgradePromise
-			self.upgradeInitiator = upgradeInitiator
-
-			#if DEBUG
-			var copyLogger = WebSocket.logger
-			copyLogger[metadataKey: "url"] = "\(url)"
-			self.logger = copyLogger
-			self.logger.trace("instance initialized.")
-			#endif
+			self.removeHandler = removeHandler
+			self.handlers = handlers
+			var modLog = log
+			modLog[metadataKey: "url"] = "\(surl.host)\(surl.pathQuery)"
+			self.logger = modLog
 		}
 
 		/// adds additional headers that are needed for a WebSocket upgrade request. It is important that it is done this way, as to have the "final say" in the values of these headers before they are written.
 		internal func addCustom(upgradeRequestHeaders:inout HTTPHeaders) {
+			let initialHeaderValues = upgradeRequestHeaders.count
 			upgradeRequestHeaders.replaceOrAdd(name: "Sec-WebSocket-Key", value: self.requestKey)
 			upgradeRequestHeaders.replaceOrAdd(name: "Sec-WebSocket-Version", value: "13")
 			// RFC 6455 requires this to be case-insensitively compared. However, many server sockets check explicitly for == "Upgrade", and SwiftNIO will (by default) send a header that is "upgrade" if not for this custom implementation with the NIOHTTPProtocolUpgrader protocol.
 			upgradeRequestHeaders.replaceOrAdd(name: "Connection", value: "Upgrade")
 			upgradeRequestHeaders.replaceOrAdd(name: "Upgrade", value: "websocket")
 			upgradeRequestHeaders.replaceOrAdd(name: "Host", value: "\(surl.host):\(surl.port)")
-			#if DEBUG
-			self.logger.trace("custom headers applied to HTTP upgrade request.")
-			#endif
+			self.logger.trace("applied upgrade-specific HTTP headers to outbound request. final request containing \(initialHeaderValues) headers.")
 		}
 		
 		/// allow or deny the upgrade based on the upgrade HTTP response headers containing the correct accept key.
@@ -102,6 +88,7 @@ extension WebSocket.Client {
 				case .movedPermanently, .found, .seeOther, .notModified, .useProxy, .temporaryRedirect, .permanentRedirect:
 					// redirect response likely
 					guard let hasNewLocation = (upgradeResponse.headers["Location"].first ?? upgradeResponse.headers["location"].first) else {
+						self.logger.error("failed to upgrade protocol from https to wws. no redirect location found in response.")
 						self.upgradePromise.fail(Error.invalidResponse(.httpStatus))
 						return false
 					}
@@ -109,20 +96,23 @@ extension WebSocket.Client {
 					return false
 				case .switchingProtocols:
 					// this is the only path forward. lets go.
+					self.logger.trace("remote peer successfully responded to HTTP upgrade request with valid status code \"switchingProtocols\". continuing with upgrad...")
 					break
 				default:
 					// unknown response
+					self.logger.error("failed to upgrade protocol from https to wws. unknown response status code: \(upgradeResponse.status)")
 					self.upgradePromise.fail(Error.invalidResponse(.httpStatus))
 					return false
 			}
 
-			// Validate the response key in 'Sec-WebSocket-Accept'
+			// validate the response key in 'Sec-WebSocket-Accept'
 			let acceptValueHeader = upgradeResponse.headers["Sec-WebSocket-Accept"]
 			guard acceptValueHeader.count == 1 else {
+				self.logger.error("failed to upgrade protocol from https to wws. invalid number of Sec-WebSocket-Accept headers in response: \(acceptValueHeader.count)")
 				return false
 			}
 
-			// Validate the response key in 'Sec-WebSocket-Accept'.
+			// validate the response key in 'Sec-WebSocket-Accept'.
 			var hasher = SHA1()
 			hasher.update(string: self.requestKey)
 			hasher.update(string: magicWebSocketGUID)
@@ -130,35 +120,27 @@ extension WebSocket.Client {
 			do {
 				expectedAcceptValue = try Base64.encode(bytes:hasher.finish())
 			} catch {
+				self.logger.critical("failed to upgrade protocol from https to wws. failed to encode SHA1 hash of request key: \(error)")
 				self.upgradePromise.fail(error)
 				return false
 			}
-			
-			#if DEBUG
-			let upgradeResult = acceptValueHeader[0] == expectedAcceptValue
-			if upgradeResult == false {
-				self.logger.error("failed to upgrade protocol from https to wws.", metadata: ["expectedAcceptValue": .string(expectedAcceptValue), "acceptValueHeader": .string(acceptValueHeader[0])])
+
+			guard acceptValueHeader[0] == expectedAcceptValue else {
+				self.logger.error("failed to upgrade protocol from https to wss. invalid Sec-WebSocket-Accept header value in response: \(acceptValueHeader[0])")
+				self.upgradePromise.fail(Error.invalidResponse(.websocketAcceptValue))
+				return false
 			}
-			self.logger.trace("evaluating upgrade result based on HTTP response. allowing upgrade: \(upgradeResult)")
-			return upgradeResult
-			#else
-			return acceptValueHeader[0] == expectedAcceptValue
-			#endif
+			self.logger.trace("response evaluation complete. upgrade to websocket protocol allowed.")
+			return true
 		}
 
 		/// called when the upgrade response has been flushed and it is safe to mutate the channel pipeline. Adds channel handlers for websocket frame encoding, decoding and errors.
-		internal func upgrade(context: ChannelHandlerContext, upgradeResponse: HTTPResponseHead) -> EventLoopFuture<Void> {
-			var useHandlers:[NIOCore.ChannelHandler] = [ByteToMessageHandler(WebSocketFrameDecoder(maxFrameSize:self.maxWebSocketFrameSize))]
-			if self.automaticErrorHandling {
-				useHandlers.append(WebSocketProtocolErrorHandler())
-			}
-			let upgradeFuture:EventLoopFuture<Void> = context.pipeline.addHandler(WebSocketFrameEncoder()).flatMap { [uh = useHandlers, chan = context.channel, upR = upgradeResponse, upI = self.upgradeInitiator] in
-				context.pipeline.addHandlers(uh).flatMap { [ch = chan, ur = upR, ui = upI] in
-					ui(ch, ur)
-				}
-			}
-			upgradeFuture.cascade(to: self.upgradePromise)
-			return upgradeFuture
+		internal func upgrade(context:ChannelHandlerContext, upgradeResponse:HTTPResponseHead) -> EventLoopFuture<Void> {
+			context.pipeline.removeHandler(self.removeHandler, promise:nil)
+			var useHandlers:[NIOCore.ChannelHandler] = [WebSocketFrameEncoder(), ByteToMessageHandler(WebSocketFrameDecoder(maxFrameSize:self.maxWebSocketFrameSize))]
+			useHandlers.append(contentsOf: self.handlers)
+			context.pipeline.addHandlers(useHandlers).cascade(to:self.upgradePromise)
+			return upgradePromise.futureResult
 		}
 	}
 }
