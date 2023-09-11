@@ -6,22 +6,43 @@ import NIOCore
 import cweb
 
 /// sequence of fragmented WebSocket frames. ``WebSocket.Handler`` uses this to combine fragmented frames into a single buffer
-public enum Frame:Sendable {
+public struct Message:Sendable {
+	/// represents a complete binary message
+	public enum Outbound:Sendable {
+		/// represents a complete binary message
+		case data([UInt8])
 
-	/// represents a complete websocket frame containing a body of data
-	case data([UInt8])
+		/// represents a complete binary message
+		case text(String)
 
-	/// represents a complete websocket frame containing a body of text
-	case text(String)
+		/// write an unsolicited pong frame to the websocket. this is technically not a part of the websocket spec, but nothing is stopping you from doing it.
+		case unsolicitedPong
 
-	/// returns the byte representation of the frames contents
-	internal func exportContent() -> ([UInt8], WebSocketOpcode) {
-		switch self {
-			case .data(let bytes):
-			return (bytes, .binary)
-			case .text(let text):
-			return (Array(text.utf8), .text)
-		}
+		/// write a ping frame to the remote peer
+		/// - parameter continuation: the continuation to resume once the corresponding pong frame is received
+		case newPing(UnsafeContinuation<TimeAmount, Swift.Error>?)
+	}
+
+	/// represents a complete binary message
+	public enum Inbound:Sendable {
+		
+		/// represents a complete binary message.
+		case data([UInt8])
+
+		/// represents a complete binary message.
+		case text(String)
+
+		/// represents an unsolicited pong frame that was received.
+		/// - parameter 1: the hash of the unsolicited pong signature.
+		case unsolicitedPong(Int)
+
+		/// represents a complete binary message.
+		/// - parameter 1: the amount of time (in seconds) that elapsed between the ping and pong frames
+		/// - parameter 2: the hash of the pong signature
+		case solicitedPong(Double, Int)
+
+		/// represents a ping frame that was received from the remote peer.
+		case ping
 	}
 
 	/// represents a partial fragment of a websocket message
@@ -84,7 +105,7 @@ public enum Frame:Sendable {
 		}
 
 		/// combines all of the frames into a single buffer
-		internal func exportCombinedResult() -> Frame {
+		internal func exportInboundMessage() -> Message.Inbound {
 			var result = ByteBufferAllocator().buffer(capacity: self.size)
 			for var buffer in self.buffers {
 				result.writeBuffer(&buffer)
@@ -92,9 +113,9 @@ public enum Frame:Sendable {
 			let allBytes = Array(result.readableBytesView)
 			switch self.type {
 				case .text:
-				return Frame.data(allBytes)
+				return Message.Inbound.data(allBytes)
 				case .binary:
-				return Frame.text(String(bytes:allBytes, encoding:.utf8)!)
+				return Message.Inbound.text(String(bytes:allBytes, encoding:.utf8)!)
 			}
 		}
 	}

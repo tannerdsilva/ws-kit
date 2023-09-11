@@ -31,23 +31,34 @@ extension WebSocket.Client {
 			self.initialHeaders = headers
 		}
 
-		/// called when the channel becomes active.
-		internal func channelActive(context:ChannelHandlerContext) {
-			let promise = context.eventLoop.makePromise(of:Void.self)
-
-			// writes the HTTP request to the channel immediately.
-			let requestHead = HTTPRequestHead(version:.init(major: 1, minor: 1), method: .GET, uri: self.urlPath, headers:initialHeaders)
-			context.write(self.wrapOutboundOut(.head(requestHead)), promise: nil)
-			context.write(self.wrapOutboundOut(.body(.byteBuffer(.init()))), promise:nil)
-			context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise:promise)
-			promise.futureResult.whenSuccess { [logFac = self.logger] in
-				logFac.debug("wrote initial HTTP upgrade request.")
-				// context.pipeline.removeHandler(self, promise:nil)
-			}
+		internal func handlerAdded(context:ChannelHandlerContext) {
+			self.logger.debug("handler added")
 		}
 
-		internal func channelInactive(context:ChannelHandlerContext) {
-			self.logger.debug("channel became inactive")
+		/// called when the channel becomes active.
+		internal func channelActive(context:ChannelHandlerContext) {
+
+			let promise = context.eventLoop.makePromise(of:Void.self)
+			promise.futureResult.cascadeFailure(to:self.upgradePromise)
+
+			// writes the HTTP request to the channel immediately.
+			let requestHead = HTTPRequestHead(version:.init(major:1, minor:1), method: .GET, uri:self.urlPath, headers:initialHeaders)
+			context.write(self.wrapOutboundOut(.head(requestHead)), promise: nil)
+			context.write(self.wrapOutboundOut(.body(.byteBuffer(.init()))), promise:nil)
+			context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise:promise)			
+			promise.futureResult.whenSuccess({
+				self.logger.debug("initial HTTP request written")
+			})
+			promise.futureResult.whenFailure({ error in
+				self.logger.critical("error writing initial HTTP request. '\(error)'")
+			})
+
+			let removeHandler = context.eventLoop.makePromise(of:Void.self)
+			context.pipeline.removeHandler(context:context, promise:removeHandler)
+			removeHandler.futureResult.cascadeFailure(to:self.upgradePromise)
+			removeHandler.futureResult.whenSuccess({
+				self.logger.debug("removed initial HTTP request writer")
+			})
 		}
 
 		/// close the channel if there is an issue.

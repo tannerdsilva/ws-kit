@@ -77,12 +77,14 @@ extension Client {
 			return channel.eventLoop.makeFailedFuture(error)
 		}
 
+		// bootstrap http handlers from scratch.
 		let requestEncoder = HTTPRequestEncoder()
         let responseDecoder = HTTPResponseDecoder(leftOverBytesStrategy:.forwardBytes)
+
 		let initialRequestWriter = InitialHTTPRequestWriter(log:log, url:splitURL, headers:headers, upgradePromise:wsPromise)
         var hndlers: [RemovableChannelHandler] = [requestEncoder, ByteToMessageHandler(responseDecoder)]
 
-		// build the websocket handler.
+		// build the websocket handlers that will be added after the protocol upgrade is completed.
 		let webSocketHandler = Handler(log:log, surl:splitURL, maxMessageSize:maxMessageSize, maxFrameSize:maxFrameSize, healthyConnectionThreshold:healthyTimeout)
 		var buildHandlers:[NIOCore.ChannelHandler] = [webSocketHandler];
 		buildHandlers.append(contentsOf:handlers)

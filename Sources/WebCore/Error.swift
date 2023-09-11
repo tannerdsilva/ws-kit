@@ -50,7 +50,7 @@ public enum Error:Swift.Error {
 			///	- argument 1: the expected payload that was sent to the remote peer.
 			///	- argument 2: the pong response that was received after sending the ping.
 			/// - NOTE: see RFC 6455 section 5.5 for more information.
-			case pongPayloadMismatch([UInt8], [UInt8])
+			// case pongPayloadMismatch([UInt8], [UInt8])
 
 			/// thrown when the fragment control rules defined in RFC 6455 section 5.4 are violated.
 			case fragmentControlViolation(FragmentControlViolation)

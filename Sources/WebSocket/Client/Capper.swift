@@ -2,12 +2,12 @@ import NIO
 import Logging
 
 internal final class Capper:ChannelInboundHandler {
-	typealias InboundIn = Frame
+	internal typealias InboundIn = Message.Inbound
 	
-	let logger:Logger
+	internal let logger:Logger
 
-	var textStream:AsyncStream<String>.Continuation? = nil
-	var binaryStream:AsyncStream<[UInt8]>.Continuation? = nil
+	internal var textStream:AsyncStream<String>.Continuation? = nil
+	internal var binaryStream:AsyncStream<[UInt8]>.Continuation? = nil
 
 	init(log:Logger) {
 		self.logger = log
@@ -42,6 +42,8 @@ internal final class Capper:ChannelInboundHandler {
 				self.textStream?.yield(text)
 			case .data(let data):
 				self.binaryStream?.yield(data)
+			default:
+				self.logger.warning("received unexpected frame type")
 		}
 	}
 }
