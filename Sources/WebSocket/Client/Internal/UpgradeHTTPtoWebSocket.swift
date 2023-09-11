@@ -14,10 +14,12 @@ extension WebSocket.Client {
 	/// this is the class that is used to upgrade the HTTP connection to a WebSocket connection.
 	internal final class HTTPToWebSocketUpgrader:NIOHTTPClientProtocolUpgrader {
 
+		fileprivate static let loggerLabel = "ws-client.bootstrap.protocol-upgrader"
+
 		/// errors that may be throwin into an instance's `upgradePromise
 		internal enum Error:Swift.Error {
 			/// the part of the response that the error is concerned with
-			enum ResponsePart:UInt8 {
+			internal enum ResponsePart:UInt8 {
 				case httpStatus
 				case websocketAcceptValue
 			}
@@ -49,13 +51,19 @@ extension WebSocket.Client {
 		private let handlers:[NIOCore.ChannelHandler]
 
 		internal init(log:Logger, surl:URL.Split, requestKey:String, maxWebSocketFrameSize:Int, upgradePromise:EventLoopPromise<Void>, handlers:[NIOCore.ChannelHandler]) {
+			var modLog:Logger
+			if log.metadataProvider != nil {
+				modLog = Logger(label:Self.loggerLabel, metadataProvider:log.metadataProvider!)
+			} else {
+				modLog = Logger(label:Self.loggerLabel)
+			}
+			modLog.logLevel = log.logLevel
+			
 			self.surl = surl
 			self.requestKey = requestKey
 			self.maxWebSocketFrameSize = maxWebSocketFrameSize
 			self.upgradePromise = upgradePromise
 			self.handlers = handlers
-			var modLog = log
-			modLog[metadataKey: "url"] = "\(surl.host)\(surl.pathQuery)"
 			self.logger = modLog
 		}
 
@@ -65,10 +73,10 @@ extension WebSocket.Client {
 			upgradeRequestHeaders.replaceOrAdd(name: "Sec-WebSocket-Key", value: self.requestKey)
 			upgradeRequestHeaders.replaceOrAdd(name: "Sec-WebSocket-Version", value: "13")
 			// RFC 6455 requires this to be case-insensitively compared. However, many server sockets check explicitly for == "Upgrade", and SwiftNIO will (by default) send a header that is "upgrade" if not for this custom implementation with the NIOHTTPProtocolUpgrader protocol.
-			upgradeRequestHeaders.replaceOrAdd(name: "Connection", value: "Upgrade")
+			upgradeRequestHeaders.replaceOrAdd(name: "Connection", value:"Upgrade")
 			upgradeRequestHeaders.replaceOrAdd(name: "Upgrade", value: "websocket")
 			upgradeRequestHeaders.replaceOrAdd(name: "Host", value: self.surl.host)
-			self.logger.trace("applied upgrade-specific HTTP headers to outbound request. final request containing \(initialHeaderValues) headers.")
+			self.logger.trace("applied upgrade-specific HTTP headers to outbound request. began with \(initialHeaderValues) headers, sending with \(upgradeRequestHeaders.count) headers.")
 		}
 		
 		/// allow or deny the upgrade based on the upgrade HTTP response headers containing the correct accept key.
@@ -94,7 +102,7 @@ extension WebSocket.Client {
 					return false
 				case .switchingProtocols:
 					// this is the only path forward. lets go.
-					self.logger.trace("remote peer successfully responded to HTTP upgrade request with valid status code \"switchingProtocols\". continuing with upgrad...")
+					self.logger.trace("remote peer successfully responded to HTTP upgrade request with valid status code \"switchingProtocols\". continuing with upgrade...")
 					break
 				default:
 					// unknown response
@@ -124,7 +132,7 @@ extension WebSocket.Client {
 			}
 
 			guard acceptValueHeader[0] == expectedAcceptValue else {
-				self.logger.error("failed to upgrade protocol from https to wss. invalid Sec-WebSocket-Accept header value in response: \(acceptValueHeader[0])")
+				self.logger.error("failed to upgrade protocol from https to wss. invalid Sec-WebSocket-Accept header value found in remote peer response: '\(acceptValueHeader[0])'")
 				self.upgradePromise.fail(Error.invalidResponse(.websocketAcceptValue))
 				return false
 			}

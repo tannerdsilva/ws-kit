@@ -137,9 +137,10 @@ internal final class Handler:ChannelDuplexHandler {
 			switch result {
 			case .success:
 				if (self.waitingOnPong == nil) {
+					self.logger.trace("upcoming ping will be used to evaluate connection health.", metadata:["ping_id":"\(rdat.hashValue)"])
 					self.waitingOnPong = rdat
 				}
-				let newDate = WebCore.Date()
+				let newDate = WebCore.Date(localTime:false)
 				self.pingDates[rdat] = newDate
 				if pongPromise != nil {
 					self.pongPromises[rdat] = pongPromise!
@@ -292,11 +293,13 @@ internal final class Handler:ChannelDuplexHandler {
 							self.pongPromises.removeValue(forKey:pongID)
 						}
 
-						// create a new message
+						// create a new message for the next member in the pipeline
 						let newMessage = Message.Inbound.unsolicitedPong(pongID.hashValue)
 						context.fireChannelRead(self.wrapInboundOut(newMessage))
 
 					case .some(let sendDate):
+						let newDate = WebCore.Date(localTime:false)
+
 						// announce and clear.
 						self.logger.debug("got pong (solicited).", metadata:["ping_id": "\(pongID.hashValue)"])
 						if (self.waitingOnPong == pongID) {
@@ -312,10 +315,9 @@ internal final class Handler:ChannelDuplexHandler {
 						}
 
 						// calculate the round trip time
-						let newDate = WebCore.Date()
 						let rtt = newDate.timeIntervalSince(sendDate)
 
-						// create a new message
+						// create a new message for the next member in the pipeline
 						let newMessage = Message.Inbound.solicitedPong(rtt, pongID.hashValue)
 						context.fireChannelRead(self.wrapInboundOut(newMessage))
 				}
@@ -348,7 +350,7 @@ internal final class Handler:ChannelDuplexHandler {
 					}
 				})
 				
-				// create a new message
+				// create a new message for the next member in the pipeline
 				let newMessage = Message.Inbound.ping
 				context.fireChannelRead(self.wrapInboundOut(newMessage))
 

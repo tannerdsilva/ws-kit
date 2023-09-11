@@ -7,24 +7,34 @@ extension WebSocket.Client {
 	
 	/// writes the initial HTTP request to the channel. this is a channel handler that is designed to be removed after the request is written.
 	internal final class InitialHTTPRequestWriter:ChannelInboundHandler, RemovableChannelHandler {
+		
+		fileprivate static let loggerLabel = "ws-client.bootstrap.http-request-writer"
+
 		typealias InboundIn = Never
 		typealias OutboundOut = HTTPClientRequestPart
 
 		/// the logger for this handler to use when logging messages.
 		internal let logger:Logger
 
-		// the path of the URL to request
+		/// the path of the URL to request
 		internal let urlPath:String
 
+		/// the upgrade promise to fail if anything goes wrong.
 		internal let upgradePromise:EventLoopPromise<Void>
 
+		/// the headers to send with the request.
 		internal let initialHeaders:HTTPHeaders
 
 		/// initialize with a URL.
-		/// - throws: if the URL is invalid
 		internal init(log:Logger, url:URL.Split, headers:HTTPHeaders, upgradePromise:EventLoopPromise<Void>) {
-			var modLog = log
-			modLog[metadataKey: "url"] = "\(url.host)\(url.pathQuery)"
+			var modLog:Logger
+			if log.metadataProvider != nil {
+				modLog = Logger(label:Self.loggerLabel, metadataProvider:log.metadataProvider!)
+			} else {
+				modLog = Logger(label:Self.loggerLabel)
+			}
+			modLog.logLevel = log.logLevel
+
 			self.logger = modLog
 			self.urlPath = url.pathQuery
 			self.upgradePromise = upgradePromise
@@ -32,12 +42,16 @@ extension WebSocket.Client {
 		}
 
 		internal func handlerAdded(context:ChannelHandlerContext) {
-			self.logger.debug("handler added")
+			self.logger.trace("added to pipeline.")
+		}
+
+		internal func handlerRemoved(context:ChannelHandlerContext) {
+			self.logger.trace("removed from pipeline.")
 		}
 
 		/// called when the channel becomes active.
 		internal func channelActive(context:ChannelHandlerContext) {
-
+			
 			let promise = context.eventLoop.makePromise(of:Void.self)
 			promise.futureResult.cascadeFailure(to:self.upgradePromise)
 
@@ -47,18 +61,15 @@ extension WebSocket.Client {
 			context.write(self.wrapOutboundOut(.body(.byteBuffer(.init()))), promise:nil)
 			context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise:promise)			
 			promise.futureResult.whenSuccess({
-				self.logger.debug("initial HTTP request written")
+				self.logger.debug("http request successfully sent.")
 			})
 			promise.futureResult.whenFailure({ error in
-				self.logger.critical("error writing initial HTTP request. '\(error)'")
+				self.logger.critical("failed to send http request. '\(error)'.")
 			})
 
 			let removeHandler = context.eventLoop.makePromise(of:Void.self)
 			context.pipeline.removeHandler(context:context, promise:removeHandler)
 			removeHandler.futureResult.cascadeFailure(to:self.upgradePromise)
-			removeHandler.futureResult.whenSuccess({
-				self.logger.debug("removed initial HTTP request writer")
-			})
 		}
 
 		/// close the channel if there is an issue.

@@ -235,6 +235,4 @@ ssize_t base64_decode_tail(char dest[3], const char *src, size_t srclen)
 
 /* end rfc4648 functions */
 
-
-
 #endif /* CCAN_BASE64_H */
