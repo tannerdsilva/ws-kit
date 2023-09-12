@@ -29,35 +29,51 @@ internal let encDate = encodingReferenceDate()
 	/// represents the seconds elapsed since `00:00:00` UTC on 1 January 1970
 	private let rawVal:Double
 
-	/// initialize with the current time
-	public init(localTime:Bool = true) {
-		
+	public init(localTime:Bool) {
 		var ts = timespec()
 		clock_gettime(CLOCK_REALTIME, &ts)
 		let seconds = Double(ts.tv_sec)
 		let nanoseconds = Double(ts.tv_nsec)
-		let total_time = seconds + nanoseconds / 1_000_000_000.0
-
-
-		var makeTime = time_t();
-		time(&makeTime)
-		let gmt = gmtime(&makeTime)!
-		gmt.pointee.tm_isdst = 0
-		let total_time_gmt = total_time
-
+		let total_time = seconds + (nanoseconds / 1_000_000_000)
 		switch localTime {
-			case true:
+			case false:
 				var Cnow = time_t()
 				let loc = localtime(&Cnow).pointee
 				var offset = Double(loc.tm_gmtoff)
+				// correct for daylight savings time if it is in effect
 				if loc.tm_isdst > 0 {
-					offset -= 3600
+					offset += 3600
 				}
-				self.rawVal = (total_time - offset) * 1_000_000_000
-			case false:
-				self.rawVal = total_time_gmt * 1_000_000_000
+				
+				self.rawVal = (total_time + offset)
+			case true:
+				self.rawVal = total_time
 		}
 	}
+
+	// /// initialize with the current time
+	// public init(localTime:Bool) {
+		
+	// 	var makeTime = time_t()
+	// 	time(&makeTime)
+	// 	let gmt = gmtime(&makeTime)!
+	// 	gmt.pointee.tm_isdst = 0
+	// 	makeTime = timegm(gmt)
+
+	// 	var Cnow = time_t()
+	// 	let loc = localtime(&Cnow).pointee
+	// 	var offset = Double(loc.tm_gmtoff)
+
+	// 	switch localTime {
+	// 		case false:
+	// 			self.rawVal = (difftime(makeTime, encDate)) * 1_000_000_000
+	// 		case true:
+	// 			if loc.tm_isdst > 0 {
+	// 				offset += 3600
+	// 			}
+	// 			self.rawVal = (difftime(makeTime, encDate) - offset) * 1_000_000_000
+	// 	}
+	// }
 
 	/// Initialize with a Unix epoch interval (seconds since 00:00:00 UTC on 1 January 1970)
 	public init(unixInterval:Double) {

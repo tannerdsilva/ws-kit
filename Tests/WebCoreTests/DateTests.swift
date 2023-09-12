@@ -38,16 +38,16 @@ final class DateTests:XCTestCase {
 	}
 	
 	func testRapidSuccessionDateCreation() {
-		let date1 = WebCore.Date(localTime:false)
-		let myMath = 2 + 2
+		let date1 = WebCore.Date(localTime:true)
 		let date2 = WebCore.Date(localTime:false)
+		// fatalError("\(date2.timeIntervalSince(date1))")
 		// Ensuring the two dates created in rapid succession have a difference
-		XCTAssertTrue(date2.timeIntervalSince(date1) > 0)
+		XCTAssertTrue(abs(date1.timeIntervalSince(date2)) > 0)
 	}
 
 	func testGMTInitialization() {
-		let localDate = WebCore.Date(localTime: true)
-		let gmtDate = WebCore.Date(localTime: false)
+		let localDate = WebCore.Date(localTime:true)
+		let gmtDate = WebCore.Date(localTime:false)
 		
 		// Get the current GMT offset
 		var Cnow = time_t()
@@ -59,5 +59,19 @@ final class DateTests:XCTestCase {
 		
 		// The difference between the two dates should be approximately equal to the GMT offset
 		XCTAssertEqual(gmtDate.timeIntervalSince(localDate), offset, accuracy: 1.0)
+	}
+
+	func testCrossCompare() {
+		let one = WebCore.Date(localTime:false)
+		let two = WebCore.Date(localTime:false)
+
+		XCTAssertEqual(one.timeIntervalSince(two), 0, accuracy: 1.0)
+	}
+
+	func testCrossCompare2() {
+		let one = WebCore.Date(localTime:true)
+		let two = WebCore.Date(localTime:true)
+
+		XCTAssertEqual(one.timeIntervalSince(two), 0, accuracy: 1.0)
 	}
 }

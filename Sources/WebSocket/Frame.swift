@@ -5,8 +5,8 @@ import NIOCore
 
 import cweb
 
-/// sequence of fragmented WebSocket frames. ``WebSocket.Handler`` uses this to combine fragmented frames into a single buffer
 public struct Message:Sendable {
+
 	/// represents a complete binary message
 	public enum Outbound:Sendable {
 		/// represents a complete binary message
@@ -19,8 +19,11 @@ public struct Message:Sendable {
 		case unsolicitedPong
 
 		/// write a ping frame to the remote peer
-		/// - parameter continuation: the continuation to resume once the corresponding pong frame is received
-		case newPing(UnsafeContinuation<TimeAmount, Swift.Error>?)
+		/// - parameter 1: the promise to fulfill when the corresponding pong frame is received
+		case newPing(EventLoopPromise<Double>?)
+
+		/// request that the remote peer close the connection gracefully
+		case gracefulDisconnect
 	}
 
 	/// represents a complete binary message
@@ -42,81 +45,78 @@ public struct Message:Sendable {
 		case solicitedPong(Double, Int)
 
 		/// represents a ping frame that was received from the remote peer.
-		case ping
+		/// - parameter 1: the promise that will fulfill when the corresponding pong frame is successfully sent
+		case ping(EventLoopFuture<Double>)
+	}
+	
+	/// type of sequence
+	internal enum SequenceType:Sendable {
+		
+		/// text frame
+		case text
+		/// binary frame
+		case binary
+
+		/// initialize a sequence type based on a raw websocket opcode.
+		/// - WARNING: this function will throw a fatal error and crash your program immediately if an invalid opcode is passed.
+		/// - valid opcodes:
+		/// 	- ``.text``
+		/// 	- ``.binary``
+		internal init?(opcode:WebSocketOpcode) {
+			switch opcode {
+				case .text:
+				self = .text
+				case .binary:
+				self = .binary
+				default:
+				return nil
+			}
+		}
+
+		/// returns the websocket opcode for sequence type
+		internal func opcode() -> WebSocketOpcode {
+			switch self {
+				case .text:
+				return .text
+				case .binary:
+				return .binary
+			}
+		}
+	}
+	
+	/// buffers containing frames
+	internal var buffers:[ByteBuffer]
+	/// total size of sequence
+	internal var size:size_t
+	/// type of sequence
+	internal var type:SequenceType
+
+	/// create a new sequence
+	/// - parameter type: the type of sequence
+	internal init(type:SequenceType) {
+		self.buffers = []
+		self.type = type
+		self.size = 0
+	}
+	
+	/// append a frame to the sequence
+	internal mutating func append(_ frame: WebSocketFrame) {
+		self.buffers.append(frame.unmaskedData)
+		self.size += frame.unmaskedData.readableBytes
 	}
 
-	/// represents a partial fragment of a websocket message
-	internal struct Partial:Sendable {
-		
-		/// type of sequence
-		internal enum SequenceType:Sendable {
-			
-			/// text frame
-			case text
-			/// binary frame
-			case binary
-
-			/// initialize a sequence type based on a raw websocket opcode.
-			/// - WARNING: this function will throw a fatal error and crash your program immediately if an invalid opcode is passed.
-			/// - valid opcodes:
-			/// 	- ``.text``
-			/// 	- ``.binary``
-			internal init?(opcode:WebSocketOpcode) {
-				switch opcode {
-					case .text:
-					self = .text
-					case .binary:
-					self = .binary
-					default:
-					return nil
-				}
-			}
-
-			/// returns the websocket opcode for sequence type
-			internal func opcode() -> WebSocketOpcode {
-				switch self {
-					case .text:
-					return .text
-					case .binary:
-					return .binary
-				}
-			}
+	/// combines all of the frames into a single buffer
+	internal func exportInboundMessage() -> Message.Inbound {
+		var result = ByteBufferAllocator().buffer(capacity: self.size)
+		for var buffer in self.buffers {
+			result.writeBuffer(&buffer)
 		}
-		
-		/// buffers containing frames
-		internal var buffers:[ByteBuffer]
-		/// total size of sequence
-		internal var size:size_t
-		/// type of sequence
-		internal var type:SequenceType
-
-		/// create a new sequence
-		/// - parameter type: the type of sequence
-		internal init(type:SequenceType) {
-			self.buffers = []
-			self.type = type
-			self.size = 0
-		}
-		
-		/// append a frame to the sequence
-		internal mutating func append(_ frame: WebSocketFrame) {
-			self.buffers.append(frame.unmaskedData)
-			self.size += frame.unmaskedData.readableBytes
-		}
-
-		/// combines all of the frames into a single buffer
-		internal func exportInboundMessage() -> Message.Inbound {
-			var result = ByteBufferAllocator().buffer(capacity: self.size)
-			for var buffer in self.buffers {
-				result.writeBuffer(&buffer)
-			}
-			let allBytes = Array(result.readableBytesView)
-			switch self.type {
-				case .text:
-				return Message.Inbound.data(allBytes)
-				case .binary:
-				return Message.Inbound.text(String(bytes:allBytes, encoding:.utf8)!)
-			}
+		let allBytes = Array(result.readableBytesView)
+		switch self.type {
+			case .text:
+			return Message.Inbound.data(allBytes)
+			case .binary:
+			return Message.Inbound.text(String(bytes:allBytes, encoding:.utf8)!)
 		}
 	}
 }

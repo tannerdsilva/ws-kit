@@ -32,7 +32,7 @@ internal final class Handler:ChannelDuplexHandler {
 		/// there is no existing frame fragments in the channel.
 		case idle
 		/// the channel contains existing frame sequence fragments that new data should append to.
-		case existingFrameFragments(Message.Partial)
+		case existingFrameFragments(Message)
 		/// switches to this mode when the maximum frame size is exceeded and parsing should pause until a fin is received.
 		case waitingForNextFrame
 	}
@@ -41,7 +41,7 @@ internal final class Handler:ChannelDuplexHandler {
 	/// used to track the dates that pings were sent. this is used to calculate the round trip time of a ping.
 	private var pingDates:[[UInt8]:WebCore.Date]
 	/// used to track the promises that are waiting on a pong response. this is used to fulfill the promise when the pong is received.
-	private var pongPromises:[[UInt8]:EventLoopPromise<Void>]
+	private var pongPromises:[[UInt8]:EventLoopPromise<Double>]
 	
 	/// the maximum number of bytes that are allowed to pass through the handler for a single data event.
 	internal let maxMessageSize:size_t
@@ -119,7 +119,7 @@ internal final class Handler:ChannelDuplexHandler {
 	}
 	
 	/// the only valid way to send a ping to the remote peer.
-	private func sendPing(context:ChannelHandlerContext, pongPromise:EventLoopPromise<Void>?) -> EventLoopFuture<Void> {
+	private func sendPing(context:ChannelHandlerContext, pongPromise:EventLoopPromise<Double>?) -> EventLoopFuture<Void> {
 		// define a new random byte sequence to use for this ping. this will define the "ping id"
 		let rdat = (0..<Self.pingDataSize).map { _ in UInt8.random(in: 0...255) }
 		
@@ -195,7 +195,7 @@ internal final class Handler:ChannelDuplexHandler {
 				break;
 			// this is the first frame in a (possible) sequence).
 			case .idle:
-				var newFrame = Message.Partial(type:Message.Partial.SequenceType(opcode:frame.opcode)!)
+				var newFrame = Message(type:Message.SequenceType(opcode:frame.opcode)!)
 				newFrame.append(frame)
 
 				guard newFrame.size <= self.maxMessageSize else {
@@ -259,6 +259,9 @@ internal final class Handler:ChannelDuplexHandler {
 
 			// pong data. this is a control frame and is handled differently than a data frame.
 			case .pong:
+				// capture the time that this pong was received
+				let captureDate = WebCore.Date(localTime:false)
+
 				guard frame.fin == true else {
 					self.logger.critical("got fragmented pong frame.")
 					context.fireErrorCaught(Error.WebSocket.rfc6455Violation(.fragmentControlViolation(.fragmentedPongReceived)))
@@ -289,7 +292,7 @@ internal final class Handler:ChannelDuplexHandler {
 						// handle a future if it exists
 						let checkPromise = self.pongPromises[pongID]
 						if checkPromise != nil {
-							checkPromise!.succeed(())
+							// checkPromise!.succeed(())
 							self.pongPromises.removeValue(forKey:pongID)
 						}
 
@@ -298,7 +301,6 @@ internal final class Handler:ChannelDuplexHandler {
 						context.fireChannelRead(self.wrapInboundOut(newMessage))
 
 					case .some(let sendDate):
-						let newDate = WebCore.Date(localTime:false)
 
 						// announce and clear.
 						self.logger.debug("got pong (solicited).", metadata:["ping_id": "\(pongID.hashValue)"])
@@ -307,15 +309,15 @@ internal final class Handler:ChannelDuplexHandler {
 							self.waitingOnPong = nil
 						}
 
+						// calculate the round trip time
+						let rtt = captureDate.timeIntervalSince(sendDate)
+
 						// handle a future if it exists
 						let checkPromise = self.pongPromises[pongID]
 						if checkPromise != nil {
-							checkPromise!.succeed(())
+							// checkPromise!.succeed(())
 							self.pongPromises.removeValue(forKey:pongID)
 						}
-
-						// calculate the round trip time
-						let rtt = newDate.timeIntervalSince(sendDate)
 
 						// create a new message for the next member in the pipeline
 						let newMessage = Message.Inbound.solicitedPong(rtt, pongID.hashValue)
@@ -324,6 +326,9 @@ internal final class Handler:ChannelDuplexHandler {
 
 			// ping data. this is a control frame and is handled differently than a data frame.
 			case .ping:
+				// capture the time that this pong was received
+				let captureDate = WebCore.Date(localTime:false)
+
 				guard frame.fin == true else {
 					self.logger.critical("got fragmented ping frame.")
 					context.fireErrorCaught(Error.WebSocket.rfc6455Violation(.fragmentControlViolation(.fragmentedPingReceived)))
@@ -338,20 +343,26 @@ internal final class Handler:ChannelDuplexHandler {
 				let writePromise = context.eventLoop.makePromise(of:Void.self)
 				context.writeAndFlush(self.wrapOutboundOut(responsePong), promise:writePromise)
 
+				let writeCompletePromise = context.eventLoop.makePromise(of:Double.self)
+
 				// debug it
 				let asArray = Array(frame.unmaskedData.readableBytesView)
 				self.logger.debug("got ping.", metadata:["ping_id": "\(asArray.hashValue)"])
-				writePromise.futureResult.whenComplete({
+				writePromise.futureResult.whenComplete({ [wcp = writeCompletePromise] in
 					switch $0 {
 					case .success:
+						let writeTime = WebCore.Date(localTime:false)
+						let rtt = captureDate.timeIntervalSince(writeTime)
+						wcp.succeed(rtt)
 						self.logger.debug("sent pong.", metadata:["ping_id": "\(asArray.hashValue)"])
 					case .failure(let error):
+						wcp.fail(error)
 						self.logger.error("failed to send pong: '\(error)'", metadata:["ping_id": "\(asArray.hashValue)"])
 					}
 				})
-				
+
 				// create a new message for the next member in the pipeline
-				let newMessage = Message.Inbound.ping
+				let newMessage = Message.Inbound.ping(writeCompletePromise.futureResult)
 				context.fireChannelRead(self.wrapInboundOut(newMessage))
 
 			// text or binary stream
