@@ -6,13 +6,12 @@ extension Client {
 
 	/// configuration for the client
 	public struct Configuration:Sendable {
-
+		/// specifies the various timeout parameters that can be configured for the client.
 		public var timeouts:Timeouts
-
+		/// specifies the various data limits that can be configured for the client.
 		public var limits:Limits
-
+		/// specifies the TLS configuration for the client.
 		public var tlsConfiguration:TLSConfiguration
-
 	}
 }
 
@@ -21,12 +20,12 @@ extension Client.Configuration {
 	public struct Timeouts:Sendable {
 
 		/// how much time is allowed to pass as the client attempts to establish a TCP connection to the relay?
-		public let tcpConnectionTimeout:TimeAmount
+		public var tcpConnectionTimeout:TimeAmount
 		/// how much time is allowed up pass as the client attempts to upgrade the connection to a WebSocket?
-		public let websocketUpgradeTimeout:TimeAmount
+		public var websocketUpgradeTimeout:TimeAmount
 		/// how much time is allowed to pass without a symmetric data exchange being sent between the user and the remote peer?
 		/// - this is not a timeout based strictly on an amount of time since the last message was received. this is a timeout interval specifically for the amount of time that can pass without a symmetric data exchange.
-		public let healthyConnectionTimeout:TimeAmount
+		public var healthyConnectionTimeout:TimeAmount
 
 		/// initialize a `Timeouts` struct.
 		public init(
