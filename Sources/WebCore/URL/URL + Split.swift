@@ -18,8 +18,8 @@ extension URL {
 		public let tlsRequired:Bool
 
 		/// initialize a `URL.Split` from a `URL`.
-		public init?(url:URL) {
-			guard let host: String = url.host else { return nil }
+		public init(url:URL) throws {
+			guard let host: String = url.host else { throw URL.Split.Failure(url:url) }
 			self.host = host
 			if let port = url.port {
 				self.port = UInt16(port)
@@ -45,10 +45,14 @@ extension URL {
 
 	/// returns a URL.Split from a given URL instance
 	public func split() throws -> Self.Split {
-		let makeSplit = Split(url:self)
-		guard makeSplit != nil else {
-			throw Error.invalidURL(self)
-		}
-		return makeSplit!
+		return try Split(url:self)
+	}
+}
+
+extension URL.Split {
+	/// thrown when a URL.Split cannot initialize from a given URL struct.
+	public struct Failure:Swift.Error {
+		/// the URL that could not be split.
+		public let url:URL
 	}
 }

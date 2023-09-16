@@ -2,7 +2,7 @@
 
 /// a url that represents a relay endpoint
 public struct URL:Sendable, CustomStringConvertible, ExpressibleByStringLiteral {
-	
+
 	/// the scheme for the URL
 	public struct Scheme:Equatable {
 		/// the raw string value of the scheme
@@ -135,25 +135,25 @@ public struct URL:Sendable, CustomStringConvertible, ExpressibleByStringLiteral 
 extension URL.Parameters {
 	/// Initialize parameters from parser struct
 	/// - Parameter query: parser holding query strings
-	internal init(fromQuery query: URL.Parser?) {
+	internal init(fromQuery query:URL.Parser?) {
 		guard var query = query else {
 			self.parameters = .init()
 			return
 		}
-		let queries: [URL.Parser] = query.split(separator: "&")
-		let queryKeyValues = queries.map { query -> (key: Substring, value: Substring) in
+		let queries: [URL.Parser] = query.split(separator:"&")
+		let queryKeyValues = queries.map { query -> (key:Substring, value:Substring) in
 			do {
 				var query = query
-				let key = try query.read(until: "=")
+				let key = try query.read(until:"=")
 				query.unsafeAdvance()
 				if query.reachedEnd() {
-					return (key: key.string[...], value: "")
+					return (key:key.string[...], value:"")
 				} else {
 					let value = query.readUntilTheEnd()
-					return (key: key.string[...], value: value.percentDecode().map { $0[...] } ?? value.string[...])
+					return (key:key.string[...], value:value.percentDecode().map { $0[...] } ?? value.string[...])
 				}
 			} catch {
-				return (key: query.string[...], value: "")
+				return (key:query.string[...], value:"")
 			}
 		}
 		self.parameters = .init(queryKeyValues)
