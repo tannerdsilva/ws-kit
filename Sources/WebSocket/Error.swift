@@ -35,6 +35,9 @@ public enum Error:Swift.Error {
 
 			/// the close reasons provided by the remote peer and the local peer did not match.
 			case closeReasonMismatch(String?, String?)
+
+			/// a close frame was encountered after a closure was already initiated by another frame.
+			case closeAlreadyInProgress
 		}
 
 		/// the remote peer sent a ping that was longer than the required maximum of 125 bytes.
@@ -91,4 +94,7 @@ public enum Error:Swift.Error {
 
 	/// an event occurred that fell out of line with RFC 6455 specifications.
 	case rfc6455Violation(RFC6455Violation)
+
+	/// thrown when an upstream writer is trying to send data through the pipeline, but the connection is in the process of closing.
+	case connectionClosureInProgress
 }

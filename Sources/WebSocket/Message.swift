@@ -21,7 +21,7 @@ public struct Message {
 		/// - parameter 1: the promise to fulfill when the corresponding pong frame is received
 		case newPing(EventLoopPromise<Double>?)
 
-		/// request that the remote peer close the connection gracefully
+		/// initiates a closure request to the remote peer.
 		case gracefulDisconnect(UInt16?, String?)
 	}
 
@@ -48,7 +48,10 @@ public struct Message {
 		case ping(EventLoopFuture<Double>)
 
 		/// the remote peer has requested that the connection be closed gracefully.
-		case gracefulDisconnect(UInt16?, String?)
+		/// - parameter 1: the status code that the remote peer has requested the connection be closed with.
+		/// - parameter 2: the reason that the remote peer has requested the connection be closed with.
+		/// - parameter 3: the promise that will fulfill when the connection has been closed.
+		case gracefulDisconnect(UInt16?, String?, EventLoopPromise<Void>)
 	}
 	
 	/// type of sequence

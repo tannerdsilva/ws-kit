@@ -178,7 +178,7 @@ extension Client {
 							self.logger?.trace("no registered latency stream, dropping measurement")
 						}
 					}
-				case .gracefulDisconnect(let code, let reason):
+				case .gracefulDisconnect(let code, let reason, let future):
 					self.logger?.notice("got graceful disconnect from system. initiating close.")
 					self.currentExpectation = .expected
 					channel.writeAndFlush(Message.Outbound.gracefulDisconnect(code, reason), promise:nil)

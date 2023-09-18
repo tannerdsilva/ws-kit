@@ -8,7 +8,7 @@ import Logging
 import ServiceLifecycle
 
 	/// a websocket client.
-	public actor Client:Sendable, Service {
+	public final actor Client:Sendable, Service {
 		
 		// immutable essentials.
 		/// the URL that this client is connected to.
@@ -21,7 +21,7 @@ import ServiceLifecycle
 		
 		/// the logger that this client will use to log messages.
 		public let logger:Logger?
-
+		
 		// using the structure.
 		// - the various continuations that this client will use to send data to the user.
 		/// the continuation that will be used to send text data to the user.
@@ -81,6 +81,20 @@ import ServiceLifecycle
 				pipeline.append(makeCapper)
 				return makeCapper
 			})
-			try await connectedClient.channel.closeFuture.get()
+
+			let result = try await withUnsafeThrowingContinuation { (exitCont:UnsafeContinuation<Capper.ConnectionResult, Swift.Error>) in
+				connectedClient.registerClosureHandler({ closureResult in
+					switch closureResult {
+						case .expected:
+							exitCont.resume(returning:.expected)
+						case .unexpected:
+							exitCont.resume(returning:.unexpected)
+						case .failureOccurred(let error):
+							exitCont.resume(throwing:error)
+					}
+				})
+			}
+			
+			self.logger?.info("connection closed with result: \(result)")
 		}
 	}

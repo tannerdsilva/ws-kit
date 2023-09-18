@@ -142,7 +142,7 @@ extension Client {
 					upgradePromise.fail(error)
 			}
 		}
-
+		
 		return try await withTaskCancellationHandler(operation: {
 			return try await withUnsafeThrowingContinuation({ (myContinuation:UnsafeContinuation<R, Swift.Error>) in 
 				returnTypePromise.futureResult.whenComplete({ result in
