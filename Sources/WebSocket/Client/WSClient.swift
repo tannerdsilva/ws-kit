@@ -7,120 +7,74 @@ import Logging
 
 import ServiceLifecycle
 
-
 	/// a websocket client.
 	public actor Client:Sendable, Service {
-
+		
+		// immutable essentials.
 		/// the URL that this client is connected to.
-		public var url:URL
-
-		/// the configuration for this client.
-		public var configuration:Configuration
-
+		public let url:URL
 		/// the event loop that this client is running on.
 		public let eventLoop:EventLoop
 
-		/// the logger for this client to use when logging messages.
+		/// the configuration for this client.
+		public let configuration:Configuration
+		
+		/// the logger that this client will use to log messages.
 		public let logger:Logger?
+
+		// using the structure.
+		// - the various continuations that this client will use to send data to the user.
+		/// the continuation that will be used to send text data to the user.
+		public var textContinuation:AsyncStream<String>.Continuation? = nil
+		/// the continuation that will be used to send binary data to the user.
+		public var binaryContinuation:AsyncStream<[UInt8]>.Continuation? = nil
+		/// the continuation that will be used to send latency data to the user (latency as measured by ping and pong messages)
+		public var latencyContinuation:AsyncStream<MeasuredLatency>.Continuation? = nil
 
 		/// initialize a new client instance.
 		/// - parameter url: the URL to connect to.
 		/// - parameter configuration: the configuration for this client.
-		public init(url:URL, configuration:Client.Configuration, on eventLoop:EventLoop, logger:Logger?) throws {
+		/// - parameter eventLoop: the event loop to use when running this client.
+		/// - parameter logger: the logger to use when logging messages.
+		public init(url:URL, configuration:Client.Configuration, on eventLoop:EventLoop, log:Logger?) throws {
 			self.url = url
 			self.configuration = configuration
 			self.eventLoop = eventLoop
-			self.logger = logger
+			self.logger = log
 		}
 
+		/// runs the client websocket service. includes integrated healthchecking, data handling, graceful shutdown, etc.
+		/// this client will immediately read the continuation variables and start sending data to them.
+		/// - NOTE: continuations registered after this method is called will not be used.
 		public func run() async throws {
-
-		}
-	}
-
-extension Client {
-	internal static func bootstrap(url:URL.Split, headers:HTTPHeaders = [:], configuration:Client.Configuration, on eventLoop:EventLoop, logger:Logger?) throws -> NIOClientTCPBootstrap {
-		let cb = ClientBootstrap(validatingGroup:eventLoop)
-		if cb != nil {
-			let bootstrap: NIOClientTCPBootstrap
-			if url.tlsRequired {
-				let sslContext = try NIOSSLContext(configuration:configuration.tlsConfiguration)
-				let tlsProvider = try NIOSSLClientTLSProvider<ClientBootstrap>(context:sslContext, serverHostname:url.host)
-				bootstrap = NIOClientTCPBootstrap(cb!, tls:tlsProvider)
-				bootstrap.enableTLS()
-			} else {
-				bootstrap = NIOClientTCPBootstrap(cb!, tls:NIOInsecureNoTLS())
+			let useLogger:Logger
+			switch self.logger {
+				case .some(let logger):
+					useLogger = logger
+				case .none:
+					useLogger = Logger(label:"ws-client")
 			}
-			return bootstrap
-		} else {
-			preconditionFailure("failed to create client bootstrap")
+
+			// first, we much connect to the remote peer.
+			let connectedClient = try await Client.protoboot(log:useLogger, url:url, headers:[:], configuration:configuration, on:eventLoop, handlerBuilder: { channel, logger, pipeline in
+				let makeCapper = Capper(log:logger, channel:channel)
+				if self.textContinuation != nil {
+					makeCapper.registerTextStreamContinuation(self.textContinuation!)
+				}
+				if self.binaryContinuation != nil {
+					makeCapper.registerBinaryStreamContinuation(self.binaryContinuation!)
+				}
+				if self.latencyContinuation != nil {
+					makeCapper.registerLatencyStreamContinuation(self.latencyContinuation!)
+				}
+				// this is where we need to build the data pipeline for this network connection. the base interface here is the Message type.
+				pipeline.append(makeCapper)
+				return makeCapper
+			})
+
+			while true {
+				try await Task.sleep(nanoseconds:5*1000*1000*1000)
+				try await connectedClient.channel.writeAndFlush(Message.Outbound.gracefulDisconnect).get()
+			}
 		}
 	}
-
-	/// bootstrap a websocket connection	
-	public static func setupChannelForWebSocketClient(log:Logger, splitURL:URL.Split, handlers:[NIOCore.ChannelHandler], headers:HTTPHeaders, channel:Channel, wsPromise:EventLoopPromise<Void>, on eventLoop:EventLoop, wsUpgradeTimeout:TimeAmount, healthyTimeout:TimeAmount, maxMessageSize:size_t, maxFrameSize:size_t) -> EventLoopFuture<Void> {
-		
-		// light up the timeout task.
-		let timeoutTask = channel.eventLoop.scheduleTask(in:wsUpgradeTimeout) {
-			// the timeout task fired. fail the upgrade promise.
-			wsPromise.fail(Error.WebSocket.UpgradeError.upgradeTimedOut)
-		}
-
-		// create a random key for the upgrade request
-		let requestKey = (0..<16).map { _ in UInt8.random(in: .min ..< .max) }
-		let base64Key:String
-		do {
-			base64Key = try Base64.encode(bytes:requestKey)
-		} catch let error {
-			// the key could not be encoded. fail the upgrade promise.
-			wsPromise.fail(error)
-			return channel.eventLoop.makeFailedFuture(error)
-		}
-
-		// bootstrap http handlers from scratch.
-		let requestEncoder = HTTPRequestEncoder()
-        let responseDecoder = HTTPResponseDecoder(leftOverBytesStrategy:.forwardBytes)
-
-		let initialRequestWriter = InitialHTTPRequestWriter(log:log, url:splitURL, headers:headers, upgradePromise:wsPromise)
-        var hndlers: [RemovableChannelHandler] = [requestEncoder, ByteToMessageHandler(responseDecoder)]
-
-		// build the websocket handlers that will be added after the protocol upgrade is completed.
-		let webSocketHandler = Handler(log:log, surl:splitURL, maxMessageSize:maxMessageSize, maxFrameSize:maxFrameSize, healthyConnectionThreshold:healthyTimeout)
-		var buildHandlers:[NIOCore.ChannelHandler] = [webSocketHandler];
-		buildHandlers.append(contentsOf:handlers)
-
-		// build the websocket upgrader.
-		let websocketUpgrader = HTTPToWebSocketUpgrader(log:log, surl:splitURL, requestKey:base64Key, maxWebSocketFrameSize:maxFrameSize, upgradePromise:wsPromise, handlers:buildHandlers)
-		let newupg = NIOHTTPClientUpgradeHandler(upgraders:[websocketUpgrader], httpHandlers:hndlers, upgradeCompletionHandler: { context in
-			timeoutTask.cancel()
-		})
-
-		// add the upgrade handler to the pipeline.
-		hndlers.append(newupg)
-		hndlers.append(initialRequestWriter)
-
-		// add the upgrade and initial request write handlers.
-		return channel.pipeline.addHandlers(hndlers)
-	}
-
-	public static func connect(log:Logger, url:URL, headers:HTTPHeaders = [:], configuration:Configuration, on eventLoop:EventLoop, handlers:[NIOCore.ChannelHandler]) -> EventLoopFuture<Void> {
-		guard let splitURL = URL.Split(url:url) else {
-			return eventLoop.makeFailedFuture(Error.invalidURL(url))
-		}
-		let promise = eventLoop.makePromise(of:Void.self)
-		do {
-			let bootstrap = try self.bootstrap(url:splitURL, headers:headers, configuration:configuration, on:eventLoop, logger:nil)
-				.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-				.channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value:1)
-				.channelInitializer({ channel in
-					self.setupChannelForWebSocketClient(log:log, splitURL:splitURL, handlers:handlers, headers:headers, channel:channel, wsPromise:promise, on:eventLoop, wsUpgradeTimeout:configuration.timeouts.websocketUpgradeTimeout, healthyTimeout:configuration.timeouts.healthyConnectionTimeout, maxMessageSize:configuration.limits.maxMessageSize, maxFrameSize:configuration.limits.maxIndividualWebSocketFrameSize)
-				})
-				.connectTimeout(configuration.timeouts.tcpConnectionTimeout)
-			bootstrap.connect(host:splitURL.host, port:Int(splitURL.port)).cascadeFailure(to:promise)
-		} catch let error {
-			promise.fail(error)
-		}
-		return promise.futureResult
-	}
-}
-

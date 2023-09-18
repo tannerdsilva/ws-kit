@@ -10,7 +10,6 @@ import Logging
 fileprivate let magicWebSocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 extension WebSocket.Client {
-
 	/// this is the class that is used to upgrade the HTTP connection to a WebSocket connection.
 	internal final class HTTPToWebSocketUpgrader:NIOHTTPClientProtocolUpgrader {
 		fileprivate static let loggerLabel = "ws-client.protoboot.upgrader"
@@ -54,7 +53,7 @@ extension WebSocket.Client {
 		internal init(log:Logger?, surl:URL.Split, requestKey:String, maxWebSocketFrameSize:Int, upgradePromise:EventLoopPromise<Void>, handlers:[NIOCore.ChannelHandler]) {
 			var modLogger = log
 			if log != nil {
-				modLogger![metadataKey:"ctx"] = "upgrader"
+				modLogger![metadataKey:"ctx"] = "http-upgrader"
 			}
 			self.logger = modLogger
 			self.surl = surl
@@ -135,7 +134,7 @@ extension WebSocket.Client {
 				self.upgradePromise.fail(Error.invalidResponse(.websocketAcceptValue))
 				return false
 			}
-			self.logger?.trace("response evaluation complete. upgrade to websocket protocol allowed.")
+			self.logger?.debug("websocket upgrade successful.")
 			return true
 		}
 
@@ -145,6 +144,10 @@ extension WebSocket.Client {
 			useHandlers.append(contentsOf: self.handlers)
 			context.pipeline.addHandlers(useHandlers).cascade(to:self.upgradePromise)
 			return self.upgradePromise.futureResult
+		}
+
+		deinit {
+			self.logger?.trace("deinit")
 		}
 	}
 }

@@ -40,7 +40,6 @@ final class DateTests:XCTestCase {
 	func testRapidSuccessionDateCreation() {
 		let date1 = WebCore.Date(localTime:true)
 		let date2 = WebCore.Date(localTime:false)
-		// fatalError("\(date2.timeIntervalSince(date1))")
 		// Ensuring the two dates created in rapid succession have a difference
 		XCTAssertTrue(abs(date1.timeIntervalSince(date2)) > 0)
 	}

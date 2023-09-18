@@ -47,6 +47,9 @@ public enum Error:Swift.Error {
 
 		/// thrown when the fragment control rules defined in RFC 6455 section 5.4 are violated.
 		case fragmentControlViolation(FragmentControlViolation)
+
+		/// thrown when a close frame is received from the remote peer, but the reciprocating close frame could not be written to the remote peer.
+		case failedToReciprocateClose(UInt16?, String?)
 	}
 
 	/// thrown when a websocket connection is successfully initiated with a relay, but the initial ping could not be written. this is considered an internal and unexpected failure. it is not expected to be thrown under healthy and normal system conditions.

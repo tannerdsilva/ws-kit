@@ -32,7 +32,7 @@ extension WebSocket.Client {
 		internal init(log:Logger?, url:URL.Split, headers:HTTPHeaders, upgradePromise:EventLoopPromise<Void>) {
 			var modLogger = log
 			if log != nil {
-				modLogger![metadataKey:"ctx"] = "http-request-writer"
+				modLogger![metadataKey:"ctx"] = "http-writer"
 			}
 			self.logger = modLogger
 			self.urlPath = url.pathQuery
@@ -87,6 +87,10 @@ extension WebSocket.Client {
 			self.logger?.critical("error caught '\(error)'.")
 			self.upgradePromise.fail(error)
 			context.close(promise:nil)
+		}
+
+		deinit {
+			self.logger?.trace("deinit")
 		}
 	}
 }

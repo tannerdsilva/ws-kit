@@ -91,59 +91,73 @@ extension Client {
 		return channel.pipeline.addHandlers(hndlers)
 	}
 
-	public static func connect<R>(log logIn:Logger, url:URL, headers:HTTPHeaders, configuration:Configuration, on eventLoop:EventLoop, handlerBuilder buildHandlersFunc:@escaping((Channel, Logger, inout [NIOCore.ChannelHandler]) -> R)) -> EventLoopFuture<R> {
+	/// bootstrap the protocol pipeline as a websocket client. connects to the specified URL with the specified configuration, and then allows the caller to build an additional pipeline and claim the return type.
+	public static func protoboot<R>(log logIn:Logger, url:URL, headers:HTTPHeaders, configuration:Configuration, on eventLoop:EventLoop, handlerBuilder buildHandlersFunc:@escaping((Channel, Logger, inout [NIOCore.ChannelHandler]) -> R)) async throws -> R {
+		// mutate the logger and burn a new metadata item to it.
 		var modLogger = logIn
 		modLogger[metadataKey:"url"] = "\(url)"
 		let log = modLogger
 
-		// split the URL so that its individual elements can be accessed easily.
-		let splitURL:URL.Split
-		do {
-			splitURL = try URL.Split(url:url)
-		} catch let error {
-			return eventLoop.makeFailedFuture(error)
-		}
-		
+		// parse the url.
+		let splitURL = try URL.Split(url:url)
+
 		// this is the return type promise. it is essentially just like the upgrade promise (which fufills when the pipeline is fully upgraded and configured), but it also contains the return type/instance that the user wants.
 		let returnTypePromise = eventLoop.makePromise(of:R.self)
 
 		// this is the promise that will be fulfilled when the upgrade to websockets is complete and the full pipeline is ready.
 		let upgradePromise = eventLoop.makePromise(of:Void.self)
 		upgradePromise.futureResult.cascadeFailure(to:returnTypePromise)
-
-		do {
-
-			// configure the bootstrap.
-			let bootstrap = try self.bootstrap(url:splitURL, configuration:configuration, eventLoop:eventLoop)
-				.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-				.channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value:1)
-				.channelInitializer({ channel in
-					
-					// allow the caller to build their pipeline and claim the return type.
-					var buildPipeline = [NIOCore.ChannelHandler]()
-					let retResult = buildHandlersFunc(channel, log, &buildPipeline)
-
-					// briefly augment the upgrade promise with the return promise that will contain the elements that the user wants.
-					upgradePromise.futureResult.whenSuccess({ [rInstPass = retResult] in
-						returnTypePromise.succeed(rInstPass)
-					})
-
-					// return the channel pipeline.
-					return Client.setupChannel(log:log, splitURL:splitURL, handlers:buildPipeline, headers:headers, channel:channel, upgradePromise:upgradePromise, on:eventLoop, wsUpgradeTimeout:configuration.timeouts.websocketUpgradeTimeout, healthyTimeout:configuration.timeouts.healthyConnectionTimeout, maxMessageSize:configuration.limits.maxMessageSize, maxFrameSize:configuration.limits.maxIndividualWebSocketFrameSize)
-				})
-				.connectTimeout(configuration.timeouts.tcpConnectionTimeout)
-
-			// connect to the remote peer.
-			bootstrap.connect(host:splitURL.host, port:Int(splitURL.port)).cascadeFailure(to:upgradePromise)
 		
-		} catch let error {
-			
-			// the bootstrap failed to initialize. fail the promise.
-			upgradePromise.fail(error)
-	
+		// configure the bootstrap.
+		let bootstrap = try Self.bootstrap(url:splitURL, configuration:configuration, eventLoop:eventLoop)
+			.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
+			.channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value:1)
+			.channelInitializer({ channel in
+
+				modLogger.trace("beginning channel initialization", metadata:["ctx":"protoboot"])
+
+				// allow the caller to build their pipeline and claim the return type.
+				var buildPipeline = [NIOCore.ChannelHandler]()
+				let retResult = buildHandlersFunc(channel, log, &buildPipeline)
+
+				// briefly augment the upgrade promise with the return promise that will contain the elements that the user wants.
+				upgradePromise.futureResult.whenSuccess({ [rInstPass = retResult] in
+					returnTypePromise.succeed(rInstPass)
+				})
+
+				// return the channel pipeline.
+				return Client.setupChannel(log:log, splitURL:splitURL, handlers:buildPipeline, headers:headers, channel:channel, upgradePromise:upgradePromise, on:eventLoop, wsUpgradeTimeout:configuration.timeouts.websocketUpgradeTimeout, healthyTimeout:configuration.timeouts.healthyConnectionTimeout, maxMessageSize:configuration.limits.maxMessageSize, maxFrameSize:configuration.limits.maxIndividualWebSocketFrameSize)
+			})
+			.connectTimeout(configuration.timeouts.tcpConnectionTimeout)
+
+		log.trace("attempting connection...", metadata:["ctx":"protoboot"])
+
+		let connectionFuture = bootstrap.connect(host:splitURL.host, port:Int(splitURL.port))
+		connectionFuture.whenComplete {
+			switch $0 {
+				case .success(let channel):
+					log.trace("successfully connected to remote peer", metadata:["ctx":"protoboot"])
+				case .failure(let error):
+					log.critical("failed to connect to remote peer", metadata:["error":"\(error.localizedDescription)", "ctx":"protoboot"])
+					upgradePromise.fail(error)
+			}
 		}
 
-		// return the return type promise.
-		return returnTypePromise.futureResult
+		return try await withTaskCancellationHandler(operation: {
+			return try await withUnsafeThrowingContinuation({ (myContinuation:UnsafeContinuation<R, Swift.Error>) in 
+				returnTypePromise.futureResult.whenComplete({ result in
+					switch result {
+						case .success(let rInst):
+							myContinuation.resume(returning:rInst)
+						case .failure(let error):
+							myContinuation.resume(throwing:error)
+					}
+				})
+			})
+		}, onCancel: {
+			// the task was cancelled. fail the upgrade promise.
+			upgradePromise.fail(CancellationError())
+		})
+
 	}
 }
