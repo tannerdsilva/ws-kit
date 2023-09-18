@@ -135,7 +135,7 @@ extension Client {
 		let connectionFuture = bootstrap.connect(host:splitURL.host, port:Int(splitURL.port))
 		connectionFuture.whenComplete {
 			switch $0 {
-				case .success(let channel):
+				case .success(_):
 					log.trace("successfully connected to remote peer", metadata:["ctx":"protoboot"])
 				case .failure(let error):
 					log.critical("failed to connect to remote peer", metadata:["error":"\(error.localizedDescription)", "ctx":"protoboot"])

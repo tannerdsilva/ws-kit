@@ -47,6 +47,7 @@ internal final class Handler:ChannelDuplexHandler {
 	private enum ConnectionStage {
 		case awaitingConnection
 		case connected(FrameParsingState)
+		case closing(UInt16?, String?)
 		case disconnected
 	}
 	private var stage = ConnectionStage.awaitingConnection
@@ -102,15 +103,32 @@ internal final class Handler:ChannelDuplexHandler {
 						// we never received a pong from our last ping, so the connection has timed out
 						context.fireErrorCaught(Error.connectionTimeout)
 					} else {
-						self._sendPing(context:context, registerCorrespondingPongPromise:nil).whenFailure { err in
-							self.logger?.critical("failed to send ping: '\(err)'")
-							_ = context.close()
+						switch self.stage {
+							case .awaitingConnection:
+								self.logger?.critical("attempted to initiate auto ping while awaiting connection.")
+								context.fireErrorCaught(WSHandlerInternalError())
+								return
+							case .connected(_):
+								self._sendPing(context:context, registerCorrespondingPongPromise:nil).whenFailure { err in
+									self.logger?.critical("failed to send ping: '\(err)'")
+									_ = context.close()
+								}
+								self._initiateAutoPing(context:context, interval:interval)
+							case .closing(_, _):
+							break;
+							case .disconnected:
+								self.logger?.critical("attempted to initiate auto ping while disconnected.")
+								context.fireErrorCaught(WSHandlerInternalError())
+								return
 						}
-						self._initiateAutoPing(context:context, interval:interval)
 					}
 				}
 
 				self.logger?.debug("scheduled next ping to send in \(interval.nanoseconds / (1000 * 1000 * 1000))s.")
+
+			case .closing(_, _):
+				break;
+
 			case .disconnected:
 				self.logger?.critical("attempted to initiate auto ping while disconnected.")
 				context.fireErrorCaught(WSHandlerInternalError())
@@ -119,89 +137,67 @@ internal final class Handler:ChannelDuplexHandler {
 	}
 
 	private func _sendUnsolicitedPong(context:ChannelHandlerContext) -> EventLoopFuture<Void> {
-		// switch self.stage {
-		// 	case .awaitingConnection:
-		// 		self.logger?.critical("attempted to send unsolicited pong while awaiting connection.")
-		// 		context.fireErrorCaught(WSHandlerInternalError())
-		// 		return context.eventLoop.makeFailedFuture(WSHandlerInternalError())
-			// case .connected(_):
-				// define a new random byte sequence to use for this ping. this will define the "ping id"
-				let rdat = (0..<Self.pingDataSize).map { _ in UInt8.random(in: 0...255) }
-				
-				// the new ping data should only be applied if the ping was successfully sent
-				var newPingID = context.channel.allocator.buffer(capacity:Self.pingDataSize)
-				newPingID.writeBytes(rdat)
+		// define a new random byte sequence to use for this ping. this will define the "ping id"
+		let rdat = (0..<Self.pingDataSize).map { _ in UInt8.random(in: 0...255) }
+		
+		// the new ping data should only be applied if the ping was successfully sent
+		var newPingID = context.channel.allocator.buffer(capacity:Self.pingDataSize)
+		newPingID.writeBytes(rdat)
 
-				// create a new frame with the masking key
-				let wsMask = WebSocketMaskingKey.random()
-				let responsePong = WebSocketFrame(fin:true, opcode:.pong, maskKey:wsMask, data:newPingID)
+		// create a new frame with the masking key
+		let wsMask = WebSocketMaskingKey.random()
+		let responsePong = WebSocketFrame(fin:true, opcode:.pong, maskKey:wsMask, data:newPingID)
 
-				// write it
-				let writePromise = context.eventLoop.makePromise(of:Void.self)
-				context.writeAndFlush(self.wrapOutboundOut(responsePong), promise:writePromise)
+		// write it
+		let writePromise = context.eventLoop.makePromise(of:Void.self)
+		context.writeAndFlush(self.wrapOutboundOut(responsePong), promise:writePromise)
 
-				// debug it
-				writePromise.futureResult.whenComplete({
-					switch $0 {
-						case .success:
-							self.logger?.debug("sent pong.", metadata:["pong_id": "\(rdat.hashValue)"])
-						case .failure(let error):
-							self.logger?.error("failed to send pong: '\(error)'", metadata:["pong_id": "\(rdat.hashValue)"])
-					}
-				})
-				return writePromise.futureResult
-		// 	case .disconnected:
-		// 		self.logger?.critical("attempted to send unsolicited pong while disconnected.")
-		// 		context.fireErrorCaught(WSHandlerInternalError())
-		// 		return context.eventLoop.makeFailedFuture(WSHandlerInternalError())
-		// }
+		// debug it
+		writePromise.futureResult.whenComplete({
+			switch $0 {
+				case .success:
+					self.logger?.debug("sent pong.", metadata:["pong_id": "\(rdat.hashValue)"])
+				case .failure(let error):
+					self.logger?.error("failed to send pong: '\(error)'", metadata:["pong_id": "\(rdat.hashValue)"])
+			}
+		})
+		return writePromise.futureResult
 	}
 	
 	/// the only valid way to send a ping to the remote peer.
 	private func _sendPing(context:ChannelHandlerContext, registerCorrespondingPongPromise:EventLoopPromise<Double>?) -> EventLoopFuture<Void> {
-		// switch self.stage {
-		// 	case .awaitingConnection:
-		// 		self.logger?.critical("attempted to send ping while awaiting connection.")
-		// 		context.fireErrorCaught(WSHandlerInternalError())
-		// 		return context.eventLoop.makeFailedFuture(WSHandlerInternalError())
-		// 	case .connected(_):
-				// define a new random byte sequence to use for this ping. this will define the "ping id"
-				let rdat = (0..<Self.pingDataSize).map { _ in UInt8.random(in: 0...255) }
-				
-				// the new ping data should only be applied if the ping was successfully sent
-				var newPingID = context.channel.allocator.buffer(capacity:Self.pingDataSize)
-				newPingID.writeBytes(rdat)
+		// define a new random byte sequence to use for this ping. this will define the "ping id"
+		let rdat = (0..<Self.pingDataSize).map { _ in UInt8.random(in: 0...255) }
+		
+		// the new ping data should only be applied if the ping was successfully sent
+		var newPingID = context.channel.allocator.buffer(capacity:Self.pingDataSize)
+		newPingID.writeBytes(rdat)
 
-				// create a new frame with a masking key to send.
-				let maskingKey = WebSocketMaskingKey.random()
-				let newFrame = WebSocketFrame(fin: true, opcode: .ping, maskKey:maskingKey, data:newPingID)
+		// create a new frame with a masking key to send.
+		let maskingKey = WebSocketMaskingKey.random()
+		let newFrame = WebSocketFrame(fin: true, opcode: .ping, maskKey:maskingKey, data:newPingID)
 
-				// write it.
-				let writeAndFlushFuture = context.writeAndFlush(wrapOutboundOut(newFrame))
-				return writeAndFlushFuture.always { result in
-					switch result {
-					case .success:
-						if (self.waitingOnPong == nil) {
-							self.logger?.trace("upcoming pong will be used to evaluate connection health.", metadata:["ping_id":"\(rdat.hashValue)"])
-							self.waitingOnPong = rdat.hashValue
-						}
-						let newDate = WebCore.Date()
-						self.pingDates[rdat] = newDate
-						if registerCorrespondingPongPromise != nil {
-							self.pongPromises[rdat] = registerCorrespondingPongPromise!
-						}
-						self.logger?.debug("sent ping.", metadata:["ping_id":"\(rdat.hashValue)"])
-						break;
-					case .failure(let error):
-						self.logger?.error("failed to send ping: '\(error)'")
-						break;
-					}
+		// write it.
+		let writeAndFlushFuture = context.writeAndFlush(wrapOutboundOut(newFrame))
+		return writeAndFlushFuture.always { result in
+			switch result {
+			case .success:
+				if (self.waitingOnPong == nil) {
+					self.logger?.trace("upcoming pong will be used to evaluate connection health.", metadata:["ping_id":"\(rdat.hashValue)"])
+					self.waitingOnPong = rdat.hashValue
 				}
-		// 	case .disconnected:
-		// 		self.logger?.critical("attempted to send ping while disconnected.")
-		// 		context.fireErrorCaught(WSHandlerInternalError())
-		// 		return context.eventLoop.makeFailedFuture(WSHandlerInternalError())
-		// }
+				let newDate = WebCore.Date()
+				self.pingDates[rdat] = newDate
+				if registerCorrespondingPongPromise != nil {
+					self.pongPromises[rdat] = registerCorrespondingPongPromise!
+				}
+				self.logger?.debug("sent ping.", metadata:["ping_id":"\(rdat.hashValue)"])
+				break;
+			case .failure(let error):
+				self.logger?.error("failed to send ping: '\(error)'")
+				break;
+			}
+		}
 	}
 
 	/// the only way to handle data frames from the remote peer. this function is only designed to support frames that are TEXT or BINARY based.
@@ -288,6 +284,8 @@ internal final class Handler:ChannelDuplexHandler {
 				self._initiateAutoPing(context:context, interval:self.healthyConnectionTimeout)
 			case .connected(_):
 				context.fireErrorCaught(WSHandlerInternalError())
+			case .closing(_, _):
+				context.fireErrorCaught(WSHandlerInternalError())
 			case .disconnected:
 				context.fireErrorCaught(WSHandlerInternalError())
 		}
@@ -298,6 +296,8 @@ internal final class Handler:ChannelDuplexHandler {
 			case .awaitingConnection:
 				context.fireErrorCaught(WSHandlerInternalError())
 			case .connected(_):
+				context.fireErrorCaught(WSHandlerInternalError())
+			case .closing(_, _):
 				self.logger?.info("disconnected.")
 				stage = .disconnected
 				self.autoPingTask?.cancel()
@@ -312,14 +312,15 @@ internal final class Handler:ChannelDuplexHandler {
 
 	/// read hook
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
+		// get the frame
+		let frame:InboundIn = self.unwrapInboundIn(data)
+
 		switch stage {
 			case .awaitingConnection:
 				context.fireErrorCaught(WSHandlerInternalError())
 				return
 			case .connected(var parsingMode):
-				// get the frame
-				let frame:InboundIn = self.unwrapInboundIn(data)
-						// handle the frame
+				// handle the frame
 				switch frame.opcode {
 
 					// pong data. this is a control frame and is handled differently than a data frame.
@@ -444,7 +445,6 @@ internal final class Handler:ChannelDuplexHandler {
 						}
 						switch parsingMode {
 							case .existingFrameFragments(var existingFrame):
-
 								// verify that the current fragment matches the existing frame type.
 								guard existingFrame.type.opcode() == frame.opcode else {
 									self.logger?.critical("received frame with opcode \(frame.opcode) but existing frame is of type \(existingFrame.type).")
@@ -461,6 +461,7 @@ internal final class Handler:ChannelDuplexHandler {
 								// this is a valid continuation. so now, handle it apropriately.
 								existingFrame.append(frame)
 								parsingMode = .existingFrameFragments(existingFrame)
+								self.logger?.trace("appended continuation frame to existing frame.")
 
 							case .idle:
 								self.logger?.critical("got continuation frame, but there is no existing frame to append to.")
@@ -468,18 +469,79 @@ internal final class Handler:ChannelDuplexHandler {
 								return
 
 							case .waitingForNextFrame:
-							break;
+								self.logger?.critical("got continuation frame, but there is no existing frame to append to.")
+								context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.continuationWithoutContext)))
+								return
 						}
 
 					case .connectionClose:
+						// mutate the frame data so we can read it
+						var frameData = frame.data
+
+						// read the close code, if it exists
+						let closeCode:UInt16?
+						if frame.data.readableBytes >= 2 {
+							closeCode = frameData.readInteger(endianness:.big, as:UInt16.self)
+						} else {
+							closeCode = nil
+						}
+						// read the close description, if it exists
+						let closeDescription:String?
+						if frame.data.readableBytes > 0 {
+							closeDescription = frameData.readString(length:frameData.readableBytes)
+						} else {
+							closeDescription = nil
+						}
+
+						self.logger?.debug("got disconnect signal from remote peer. initiating close.", metadata:["close_code": "\(String(describing:closeCode))", "close_description": "\(String(describing:closeDescription))"])
 						
-						// create a new message for the next member in the pipeline
-						let newMessage = Message.Inbound.gracefulDisconnect
+						// initiate the closing mode.
+						self.stage = .closing(closeCode, closeDescription)
+
+						// create a new message for the next member in the pipeline so that they can prepare the channel for closing.
+						let newMessage = Message.Inbound.gracefulDisconnect(closeCode, closeDescription)
 						context.fireChannelRead(self.wrapInboundOut(newMessage))
 
 				default:
 					context.fireErrorCaught(Error.opcodeNotSupported(frame.opcode))
 					break
+				}
+			
+			case .closing(let closeCode, let closeDescription):
+				switch frame.opcode {
+					case .connectionClose:
+						// mutate the frame data so we can read it
+						var frameData = frame.data
+
+						// read the close code, if it exists
+						let gotCode:UInt16?
+						if frame.data.readableBytes >= 2 {
+							gotCode = frameData.readInteger(endianness:.big, as:UInt16.self)
+						} else {
+							gotCode = nil
+						}
+						// read the close description, if it exists
+						let gotDesc:String?
+						if frame.data.readableBytes > 0 {
+							gotDesc = frameData.readString(length:frameData.readableBytes)
+						} else {
+							gotDesc = nil
+						}
+						
+						guard gotCode == closeCode else {
+							context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.closeCodeMismatch(gotCode, closeCode))))
+							return
+						}
+						guard gotDesc == closeDescription else {
+							context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.closeReasonMismatch(gotDesc, closeDescription))))
+							return
+						}
+
+						// close messages should not be passed on here because the connection is closing, and in this circumstance, the user was the one who initiated the close.
+						context.channel.close(promise:nil)
+					default:
+						context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.continuationWithoutContext)))
+						return
 				}
 
 			case .disconnected:
@@ -542,12 +604,39 @@ internal final class Handler:ChannelDuplexHandler {
 						self._sendUnsolicitedPong(context:context).cascade(to:promise)
 					case .newPing(let pongResponsePromiseRegister):
 						self._sendPing(context:context, registerCorrespondingPongPromise:pongResponsePromiseRegister).cascade(to:promise)
-					case .gracefulDisconnect:
-						let frame = WebSocketFrame(fin:true, opcode:.connectionClose, maskKey:nil, data:context.channel.allocator.buffer(capacity:0))
+					case .gracefulDisconnect(let closeCode, let closeDescription):
+						// determine the length of the complete body
+						let writeBuffer:ByteBuffer
+						switch (closeCode, closeDescription) {
+							case (.some(let code), .some(let desc)):
+								let length = 2 + desc.utf8.count
+								var wb = context.channel.allocator.buffer(capacity:length)
+								wb.writeInteger(code, endianness:.big, as:UInt16.self)
+								wb.writeString(desc)
+								writeBuffer = wb
+							case (.some(let code), .none):
+								let length = 2
+								var wb = context.channel.allocator.buffer(capacity:length)
+								wb.writeInteger(code, endianness:.big, as:UInt16.self)
+								writeBuffer = wb
+							case (.none, .some(_)):
+								context.fireErrorCaught(Error.rfc6455Violation(.missingCloseCodeForDescription(closeDescription!)))
+								return
+							case (.none, .none):
+								writeBuffer = context.channel.allocator.buffer(capacity:0)
+						}
+						
+						let maskingKey = WebSocketMaskingKey.random()
+						let frame = WebSocketFrame(fin:true, opcode:.connectionClose, maskKey:maskingKey, data:writeBuffer)
 						context.writeAndFlush(self.wrapOutboundOut(frame), promise:promise)
+						self.stage = .closing(closeCode, closeDescription)
 				}
+			case .closing(_, _):
+				self.logger?.error("attempted to write data while closing.")
+				context.fireErrorCaught(WSHandlerInternalError())
+				return
 			case .disconnected:
-				self.logger?.critical("attempted to write data while disconnected.")
+				self.logger?.error("attempted to write data while disconnected.")
 				context.fireErrorCaught(WSHandlerInternalError())
 				return
 		}

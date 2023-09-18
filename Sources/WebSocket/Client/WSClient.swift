@@ -67,14 +67,20 @@ import ServiceLifecycle
 				if self.latencyContinuation != nil {
 					makeCapper.registerLatencyStreamContinuation(self.latencyContinuation!)
 				}
+				makeCapper.registerClosureHandler({ closer in
+					switch closer {
+						case .expected:
+							useLogger.info("connection closed gracefully")
+						case .unexpected:
+							useLogger.info("connection closed unexpectedly")
+						case .failureOccurred(let error):
+							useLogger.error("connection closed due to error: \(error)")
+					}
+				})
 				// this is where we need to build the data pipeline for this network connection. the base interface here is the Message type.
 				pipeline.append(makeCapper)
 				return makeCapper
 			})
-
-			while true {
-				try await Task.sleep(nanoseconds:5*1000*1000*1000)
-				try await connectedClient.channel.writeAndFlush(Message.Outbound.gracefulDisconnect).get()
-			}
+			try await connectedClient.channel.closeFuture.get()
 		}
 	}

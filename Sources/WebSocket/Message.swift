@@ -22,7 +22,7 @@ public struct Message {
 		case newPing(EventLoopPromise<Double>?)
 
 		/// request that the remote peer close the connection gracefully
-		case gracefulDisconnect
+		case gracefulDisconnect(UInt16?, String?)
 	}
 
 	/// represents a complete binary message
@@ -48,7 +48,7 @@ public struct Message {
 		case ping(EventLoopFuture<Double>)
 
 		/// the remote peer has requested that the connection be closed gracefully.
-		case gracefulDisconnect
+		case gracefulDisconnect(UInt16?, String?)
 	}
 	
 	/// type of sequence

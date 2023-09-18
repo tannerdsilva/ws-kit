@@ -29,6 +29,12 @@ public enum Error:Swift.Error {
 			/// a new websocket data stream was initated from the remote peer, but there was already existing data being handled by the connection.
 			/// - NOTE: see RFC 6455 section 5.4 for more information.
 			case initiationWithUnfinishedContext
+
+			/// the close codes provided by the remote peer and the local peer did not match.
+			case closeCodeMismatch(UInt16?, UInt16?)
+
+			/// the close reasons provided by the remote peer and the local peer did not match.
+			case closeReasonMismatch(String?, String?)
 		}
 
 		/// the remote peer sent a ping that was longer than the required maximum of 125 bytes.
@@ -50,6 +56,9 @@ public enum Error:Swift.Error {
 
 		/// thrown when a close frame is received from the remote peer, but the reciprocating close frame could not be written to the remote peer.
 		case failedToReciprocateClose(UInt16?, String?)
+
+		/// thrown when a close frame is received in the pipeline and a close code is provided, but the close code as not assigned. RFC 6455 section 5.5.1 states that a close code must be provided if a close reason is provided.
+		case missingCloseCodeForDescription(String)
 	}
 
 	/// thrown when a websocket connection is successfully initiated with a relay, but the initial ping could not be written. this is considered an internal and unexpected failure. it is not expected to be thrown under healthy and normal system conditions.
