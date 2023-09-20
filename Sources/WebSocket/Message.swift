@@ -50,7 +50,7 @@ public struct Message {
 		/// the remote peer has requested that the connection be closed gracefully.
 		/// - parameter 1: the status code that the remote peer has requested the connection be closed with.
 		/// - parameter 2: the reason that the remote peer has requested the connection be closed with.
-		/// - parameter 3: the promise that will fulfill when the connection has been closed.
+		/// - parameter 3: the promise that the downstream consumer will use to signal that they are ready to reciprocate the closure message.
 		case gracefulDisconnect(UInt16?, String?, EventLoopPromise<Void>)
 	}
 	

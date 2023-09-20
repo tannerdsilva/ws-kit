@@ -5,6 +5,7 @@ import WebCore
 import Logging
 
 extension Client {
+
 	/// builds a basic client bootstrapper for the given URL and configuration.
 	/// - parameter url: the ``URL.Split`` to connect to.
 	/// - parameter configuration: the configuration for this client.
@@ -92,7 +93,7 @@ extension Client {
 	}
 
 	/// bootstrap the protocol pipeline as a websocket client. connects to the specified URL with the specified configuration, and then allows the caller to build an additional pipeline and claim the return type.
-	public static func protoboot<R>(log logIn:Logger, url:URL, headers:HTTPHeaders, configuration:Configuration, on eventLoop:EventLoop, handlerBuilder buildHandlersFunc:@escaping((Channel, Logger, inout [NIOCore.ChannelHandler]) -> R)) async throws -> R {
+	public static func protoboot<R>(log logIn:Logger, url:URL, headers:HTTPHeaders, configuration:Configuration, on eventLoop:EventLoop, handlerBuilder buildHandlersFunc:@escaping((Logger, inout [NIOCore.ChannelHandler]) -> R)) async throws -> (Channel, R) {
 		// mutate the logger and burn a new metadata item to it.
 		var modLogger = logIn
 		modLogger[metadataKey:"url"] = "\(url)"
@@ -108,20 +109,21 @@ extension Client {
 		let upgradePromise = eventLoop.makePromise(of:Void.self)
 		upgradePromise.futureResult.cascadeFailure(to:returnTypePromise)
 		
-		// configure the bootstrap.
+		// build the bootstrap
 		let bootstrap = try Self.bootstrap(url:splitURL, configuration:configuration, eventLoop:eventLoop)
 			.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 			.channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value:1)
 			.channelInitializer({ channel in
 
-				modLogger.trace("beginning channel initialization", metadata:["ctx":"protoboot"])
+				modLogger.debug("beginning channel pipeline initialization", metadata:["ctx":"protoboot"])
 
 				// allow the caller to build their pipeline and claim the return type.
 				var buildPipeline = [NIOCore.ChannelHandler]()
-				let retResult = buildHandlersFunc(channel, log, &buildPipeline)
+				let retResult = buildHandlersFunc(log, &buildPipeline)
 
 				// briefly augment the upgrade promise with the return promise that will contain the elements that the user wants.
-				upgradePromise.futureResult.whenSuccess({ [rInstPass = retResult] in
+				upgradePromise.futureResult.whenSuccess({ [ml = modLogger, rInstPass = retResult] in
+					ml.debug("websocket upgrade complete. yielding return type from pipeline initializer.", metadata:["ctx":"protoboot"])
 					returnTypePromise.succeed(rInstPass)
 				})
 
@@ -130,34 +132,27 @@ extension Client {
 			})
 			.connectTimeout(configuration.timeouts.tcpConnectionTimeout)
 
-		log.trace("attempting connection...", metadata:["ctx":"protoboot"])
+		// connect.
+		log.trace("attempting to establish tcp connection...", metadata:["ctx":"protoboot"])
+		let connectionFuture = try await bootstrap.connect(host:splitURL.host, port:Int(splitURL.port)).get()
+		log.debug("tcp connection established.")
 
-		let connectionFuture = bootstrap.connect(host:splitURL.host, port:Int(splitURL.port))
-		connectionFuture.whenComplete {
-			switch $0 {
-				case .success(_):
-					log.trace("successfully connected to remote peer", metadata:["ctx":"protoboot"])
-				case .failure(let error):
-					log.critical("failed to connect to remote peer", metadata:["error":"\(error.localizedDescription)", "ctx":"protoboot"])
-					upgradePromise.fail(error)
-			}
-		}
-		
-		return try await withTaskCancellationHandler(operation: {
+		// launch the async task to acquire the return type. this should be completed when the websocket upgrade is complete.
+		return (connectionFuture, try await withTaskCancellationHandler(operation: {
 			return try await withUnsafeThrowingContinuation({ (myContinuation:UnsafeContinuation<R, Swift.Error>) in 
 				returnTypePromise.futureResult.whenComplete({ result in
 					switch result {
 						case .success(let rInst):
-							myContinuation.resume(returning:rInst)
+							myContinuation.resume(returning:(rInst))
 						case .failure(let error):
 							myContinuation.resume(throwing:error)
 					}
 				})
+				log.trace("successfully synchronized swift continuation with return type promise.", metadata:["ctx":"protoboot"])
 			})
 		}, onCancel: {
 			// the task was cancelled. fail the upgrade promise.
 			upgradePromise.fail(CancellationError())
-		})
-
+		}))
 	}
 }

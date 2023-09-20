@@ -14,6 +14,15 @@ final class WebSocketClientTests:XCTestCase {
 		newLogger.logLevel = .trace
 		let newURL = URL("wss://relay.damus.io")
 		let newClient = try WebSocket.Client(url:newURL, configuration:WebSocket.Client.Configuration(), on:newEventLoop, log:newLogger)
-		try await newClient.run()
+		try await withThrowingTaskGroup(of:Void.self) { group in
+			group.addTask {
+				try await newClient.run()
+			}
+			group.addTask {
+				await Task.sleep(5 * 1000 * 1000 * 1000)
+				try await newClient.initiateSafeClosure()
+			}
+			try await group.waitForAll()
+		}
 	}
 }

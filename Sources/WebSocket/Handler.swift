@@ -34,7 +34,7 @@ internal final class Handler:ChannelDuplexHandler {
 	/// the task that is used to schedule the next ping. this also as a timeout handler. this should never be nil when the handler is added to the channel (although tasks may be cancelled)
 	private var autoPingTask:Scheduled<Void>?
 	
-	// frame parsing mechanics
+	/// frame parsing mechanics
 	private enum FrameParsingState {
 		/// there is no existing frame fragments in the channel.
 		case idle
@@ -43,20 +43,22 @@ internal final class Handler:ChannelDuplexHandler {
 		/// switches to this mode when the maximum frame size is exceeded and parsing should pause until a fin is received.
 		case waitingForNextFrame
 	}
-	// the connection stage of this handler. this is used to determine if certain actions are valid, and the memory associated.
+	/// the connection stage of this handler. this is used to determine if certain actions are valid, and the memory associated.
 	private enum ConnectionStage {
+		/// the handler is not connected to a remote peer.
 		case awaitingConnection
+		/// the handler is connected to a remote peer.
+		/// - parameter 1: the current parsing mode of the handler.
 		case connected(FrameParsingState)
+		/// the remote peer has initiated a graceful closure of the connection. a responding close frame should be sent, but has not at this point.
 		case remoteClosing(UInt16?, String?)
+		/// the user has initiated a graceful closure of the connection. a responding close frame should be sent by our peer, but has not at this point.
 		case userClosing(FrameParsingState, UInt16?, String?)
+		/// the connection has been closed and the handler is no longer valid.
 		case disconnected
 	}
 	// the current connection stage of this handler.
-	private var stage = ConnectionStage.awaitingConnection {
-		didSet {
-			self.logger?.trace("connection stage changed from \(oldValue) to \(stage).")
-		}
-	}
+	private var stage = ConnectionStage.awaitingConnection
 
 	/// used to track the dates that pings were sent. this is used to calculate the round trip time of a ping.
 	private var pingDates:[[UInt8]:WebCore.Date]
@@ -278,11 +280,10 @@ internal final class Handler:ChannelDuplexHandler {
 		switch stage {
 			// this is the only valid path forward
 			case .awaitingConnection:
-				self.logger?.info("connected.")
+				self.logger?.info("connected. (handler added).")
 				self.stage = .connected(.idle)
 				self.waitingOnPong = nil
 				self._initiateAutoPing(context:context, interval:self.healthyConnectionTimeout)
-				break;
 
 			// all invalid paths - all indicate a fatal internal error
 			case .connected(_):
@@ -292,7 +293,7 @@ internal final class Handler:ChannelDuplexHandler {
 			case .remoteClosing(_, _):
 				fallthrough;
 			case .disconnected:
-				self.logger?.critical("handler added while in an invalid stage. this is indicative of a fatal internal error.", metadata:["stage":"\(stage)"])
+				self.logger?.critical("handler connected while in an invalid stage. this is indicative of a fatal internal error.", metadata:["stage":"\(stage)"])
 				context.fireErrorCaught(WSHandlerInternalError())
 				break;
 		}
@@ -332,10 +333,8 @@ internal final class Handler:ChannelDuplexHandler {
 				self.pingDates = [:]
 				self.pongPromises = [:]
 
-			// invalid path. this is indicative of a fatal internal error
 			case .disconnected:
-				self.logger?.critical("handler removed while disconnected. this is indicative of a fatal internal error.")
-				context.fireErrorCaught(WSHandlerInternalError())
+				self.logger?.trace("handler removed.")
 		}
 	}
 
@@ -348,6 +347,7 @@ internal final class Handler:ChannelDuplexHandler {
 			case notClosing
 			case userClosing(UInt16?, String?)
 		}
+
 		// the function that will process the frame under "normal operating procedures". 
 		// it is assumed the stage will remain the same and the function can only write to the inout parsingMode unless a completely different stage is returned.
 		func _parse(mode parsingMode:inout FrameParsingState, closeState:ClosingState) -> ConnectionStage? {
@@ -616,7 +616,7 @@ internal final class Handler:ChannelDuplexHandler {
 					// write the new parsing mode back to storage of the same stage
 					self.stage = .connected(parsingMode)
 				}
-				break
+				return
 
 			case .remoteClosing(_, _):
 				self.logger?.critical("received frame while remote peer is closing.")
@@ -633,7 +633,7 @@ internal final class Handler:ChannelDuplexHandler {
 					// write the new parsing mode back to storage of the same stage
 					self.stage = .userClosing(parsingMode, closeCode, closeDesc)
 				}
-				break
+				return
 
 			case .disconnected:
 				context.fireErrorCaught(WSHandlerInternalError())
@@ -679,22 +679,31 @@ internal final class Handler:ChannelDuplexHandler {
 			}
 		} while writeTotal > 0
 	}
-
+  
 	// write hook
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+		// get the message that we are going to write.
 		let message = self.unwrapOutboundIn(data)
+
+		// act based on the current stage of the connection.
 		switch self.stage {
+			
+			// clearly invalid.
 			case .awaitingConnection:
-				self.logger?.critical("attempted to write data while awaiting connection.")
+				self.logger?.critical("attempted to write data while awaiting connection establishment.")
 				context.fireErrorCaught(WSHandlerInternalError())
 				promise?.fail(WSHandlerInternalError())
 				return
+
+			// the only valid path forward.
 			case .connected(let frameData):
 				// get the message and export it so that it can be assembled and written.
 				switch message {
 					case .data(var bytesToWrite):
+						self.logger?.trace("writing \(bytesToWrite.count) bytes of data.")
 						self._writeFrameData(context:context, opcode:.binary, data:&bytesToWrite, promise:promise)
 					case .text(let textToSendAndEncode):
+						self.logger?.trace("writing \(textToSendAndEncode.utf8.count) bytes of text.")
 						var bytesToWrite = Array(textToSendAndEncode.utf8)
 						self._writeFrameData(context:context, opcode:.text, data:&bytesToWrite, promise:promise)
 					case .unsolicitedPong:
@@ -702,7 +711,8 @@ internal final class Handler:ChannelDuplexHandler {
 					case .newPing(let pongResponsePromiseRegister):
 						self._sendPing(context:context, registerCorrespondingPongPromise:pongResponsePromiseRegister).cascade(to:promise)
 					case .gracefulDisconnect(let closeCode, let closeDescription):
-						// determine the length of the complete body
+				
+						// assemble the complete body of the close frame.
 						let writeBuffer:ByteBuffer
 						switch (closeCode, closeDescription) {
 							case (.some(let code), .some(let desc)):
@@ -718,22 +728,26 @@ internal final class Handler:ChannelDuplexHandler {
 								writeBuffer = wb
 							case (.none, .some(_)):
 								context.fireErrorCaught(Error.rfc6455Violation(.missingCloseCodeForDescription(closeDescription!)))
-								
 								return
 							case (.none, .none):
 								writeBuffer = context.channel.allocator.buffer(capacity:0)
 						}
 						
+						// package it into a frame and write it.
 						let maskingKey = WebSocketMaskingKey.random()
 						let frame = WebSocketFrame(fin:true, opcode:.connectionClose, maskKey:maskingKey, data:writeBuffer)
 						self.stage = .userClosing(frameData, closeCode, closeDescription)
 						context.writeAndFlush(self.wrapOutboundOut(frame)).cascade(to:promise)
 				}
+
+			// since timing can never be perfect, we will not throw a channel error if a close handshake is in progress.
 			case .remoteClosing(_, _):
 				fallthrough
 			case .userClosing(_, _, _):
+				// fail the passed promise only.
 				promise?.fail(Error.connectionClosureInProgress)
 				return
+
 			case .disconnected:
 				self.logger?.error("attempted to write data while disconnected.")
 				context.fireErrorCaught(WSHandlerInternalError())

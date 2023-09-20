@@ -6,10 +6,11 @@ extension Client {
 	/// this is a client utility that enables the "frontend convenience client" for this library.
 	/// this "capper" effectively "caps" data and events from the NIO pipeline and sends them to the frontend using native Swift async streams.
 	internal final class Capper:ChannelInboundHandler {
-		internal enum ConnectionResult {
-			case expected
-			case failureOccurred(Swift.Error)
-			case unexpected
+
+		private enum ConnectionStage {
+			case notConnected
+			case connected
+			case closed(Result<Void, Swift.Error>)
 		}
 
 		// nio stuff
@@ -17,11 +18,11 @@ extension Client {
 		
 		// main infrastructure stuff
 		private let logger:Logger?
-		internal let channel:Channel
+		private var eventLoop:EventLoop? = nil
 
 		/// the closure expectation status for this capper.
-		private var currentExpectation:ConnectionResult = .unexpected
-		private var closureHandler:((ConnectionResult) -> Void)? = nil
+		private var caughtError:Swift.Error? = nil
+		private var closureHandler:((Result<Void, Swift.Error>) -> Void)? = nil
 
 		// variables that are configured by the implementers of this class.
 		/// handles text messages that are received from the remote peer.
@@ -31,105 +32,67 @@ extension Client {
 		/// handles latency measurements that are received from the remote peer.
 		private var latencyStream:AsyncStream<MeasuredLatency>.Continuation? = nil
 
-		internal init(log:Logger?, channel:Channel) {
+		internal init(log:Logger?) {
 			var modLogger = log
 			if log != nil {
 				modLogger![metadataKey:"ctx"] = "capper"
 			}
 			self.logger = modLogger
-			self.channel = channel
 		}
 
-		@discardableResult internal func registerClosureHandler(_ closureHandler:@escaping (ConnectionResult) -> Void) -> EventLoopFuture<Void> {
-			let subFuture = channel.eventLoop.submit({
-				self.logger?.trace("registered closure handler")
-				self.closureHandler = closureHandler
-			})
-			subFuture.whenComplete { result in
-				switch result {
-					case .success(_):
-						self.logger?.trace("successfully registered closure handler")
-					case .failure(let error):
-						self.logger?.error("failed to register closure handler", metadata:["error":"\(error.localizedDescription)"])
-				}
-			}
-			return subFuture
+		/// **WARNING**: this function MUST be called on the same event loop that this handler is running on.
+		internal func registerClosureHandler(_ closureHandler:@escaping(Result<Void, Swift.Error>) -> Void) {
+			self.closureHandler = closureHandler
+			self.logger?.trace("registered closure handler")
 		}
 
-		/// allows a user of this class to register the text stream continuation that will be used to handle text messages.
-		@discardableResult internal func registerTextStreamContinuation(_ textStream:AsyncStream<String>.Continuation) -> EventLoopFuture<Void> {
-			let subFuture = channel.eventLoop.submit({
-				self.logger?.trace("registered text stream")
-				self.textStream = textStream
-			})
-			subFuture.whenComplete { result in
-				switch result {
-					case .success(_):
-						self.logger?.trace("successfully registered text stream")
-					case .failure(let error):
-						self.logger?.error("failed to register text stream", metadata:["error":"\(error.localizedDescription)"])
-				}
-			}
-			return subFuture
+		/// **WARNING**: this function MUST be called on the same event loop that this handler is running on.
+		internal func registerTextStreamContinuation(_ textStream:AsyncStream<String>.Continuation) {
+			self.textStream = textStream
+			self.logger?.trace("registered text stream continuation")
 		}
 
-		@discardableResult internal func registerBinaryStreamContinuation(_ binaryStream:AsyncStream<[UInt8]>.Continuation) -> EventLoopFuture<Void> {
-			let subFuture = channel.eventLoop.submit({
-				self.logger?.trace("registered binary stream")
-				self.binaryStream = binaryStream
-			})
-			subFuture.whenComplete {
-				switch $0 {
-					case .success(_):
-						self.logger?.trace("successfully registered binary stream")
-					case .failure(let error):
-						self.logger?.error("failed to register binary stream", metadata:["error":"\(error.localizedDescription)"])
-				}
-			}
-			return subFuture
+		/// **WARNING**: this function MUST be called on the same event loop that this handler is running on.
+		internal func registerBinaryStreamContinuation(_ binaryStream:AsyncStream<[UInt8]>.Continuation) {
+			self.binaryStream = binaryStream
+			self.logger?.trace("registered binary stream continuation")
 		}
 
-		@discardableResult internal func registerLatencyStreamContinuation(_ latencyStream:AsyncStream<MeasuredLatency>.Continuation) -> EventLoopFuture<Void> {
-			let subFuture = channel.eventLoop.submit({
-				self.logger?.trace("registered latency stream")
-				self.latencyStream = latencyStream
-			})
-			subFuture.whenComplete {
-				switch $0 {
-					case .success(_):
-						self.logger?.trace("successfully registered latency stream")
-					case .failure(let error):
-						self.logger?.error("failed to register latency stream", metadata:["error":"\(error.localizedDescription)"])
-				}
-			}
-			return subFuture
+		/// **WARNING**: this function MUST be called on the same event loop that this handler is running on.
+		internal func registerLatencyStreamContinuation(_ latencyStream:AsyncStream<MeasuredLatency>.Continuation) {
+			self.latencyStream = latencyStream
+			self.logger?.trace("registered latency stream continuation")
 		}
 		
+		/// called when the handler is added to the pipeline.
 		internal func handlerAdded(context:ChannelHandlerContext) {
-			self.logger?.trace("handler added")
-			context.channel.closeFuture.whenComplete { result in
-				switch result {
-					case .success(_):
-						self.logger?.info("channel closed.")
-						self.closureHandler?(self.currentExpectation)
-					case .failure(let error):
-						self.logger?.critical("channel closed with error. this should never happen.", metadata:["error":"\(error.localizedDescription)"])
+			self.logger?.trace("handler added.")
+			self.eventLoop = context.eventLoop
+			context.channel.closeFuture.whenComplete { _ in
+				self.logger?.info("channel closed.")
+				switch self.caughtError {
+					case .some(let error):
+						self.logger?.critical("channel closed with error.", metadata:["error":"\(error.localizedDescription)"])
+						self.closureHandler?(.failure(error))
+					case .none:
+						self.logger?.info("channel closed without error.")
+						self.closureHandler?(.success(()))
 				}
 			}
 		}
 
 		internal func handlerRemoved(context:ChannelHandlerContext) {
-			self.logger?.trace("handler removed")
+			self.logger?.trace("handler removed.")
 			if textStream != nil {
-				self.logger?.trace("finishing registered text stream")
+				self.logger?.trace("finishing registered text stream.")
 				textStream!.finish()
 			}
 			if binaryStream != nil {
-				self.logger?.trace("finishing registered binary stream")
+				self.logger?.trace("finishing registered binary stream.")
 				binaryStream!.finish()
 			}
 			if latencyStream != nil {
-				self.logger?.trace("finishing registered latency stream")
+				self.logger?.trace("finishing registered latency stream.")
 				latencyStream!.finish()
 			}
 			textStream = nil
@@ -178,22 +141,15 @@ extension Client {
 							self.logger?.trace("no registered latency stream, dropping measurement")
 						}
 					}
-				case .gracefulDisconnect(let code, let reason, let future):
-					self.logger?.notice("got graceful disconnect from system. initiating close.")
-					self.currentExpectation = .expected
-					channel.writeAndFlush(Message.Outbound.gracefulDisconnect(code, reason), promise:nil)
+				case .gracefulDisconnect(_, _, let future):
+					self.logger?.notice("got graceful disconnect from remote peer. initiating close.")
+					future.completeWith(.success(()));
 			}
 		}
 
-		public func initiateClosure() -> EventLoopFuture<Void> {
-			self.logger?.trace("closing connection")
-			self.currentExpectation = .expected
-			return channel.writeAndFlush(Message.Outbound.gracefulDisconnect(nil, nil))
-		}
-
-		public func errorCaught(context:ChannelHandlerContext, error:Error) {
+		public func errorCaught(context:ChannelHandlerContext, error:Swift.Error) {
 			self.logger?.critical("error caught in pipeline", metadata:["error":"\(error.localizedDescription)"])
-			self.currentExpectation = .failureOccurred(error)
+			self.caughtError = error
 			context.close(mode:.all, promise:nil)
 		}
 	}

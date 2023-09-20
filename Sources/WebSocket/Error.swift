@@ -92,9 +92,15 @@ public enum Error:Swift.Error {
 	/// the configured timeout interval for the established connection could not be sustained with websocket pings.
 	case connectionTimeout
 
+	/// thrown when a websocket connection is closed without the proper close handshake dance.
+	case unexpectedConnectionClosure
+
 	/// an event occurred that fell out of line with RFC 6455 specifications.
 	case rfc6455Violation(RFC6455Violation)
 
 	/// thrown when an upstream writer is trying to send data through the pipeline, but the connection is in the process of closing.
 	case connectionClosureInProgress
+
+	/// thrown when an operation is attempted on a closed connection.
+	case connectionClosed
 }
