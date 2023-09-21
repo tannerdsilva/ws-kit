@@ -9,6 +9,7 @@ import ServiceLifecycle
 
 /// a websocket client.
 public final actor Client:Sendable, Service {
+	/// thrown when the client is in an invalid state for the requested operation.
 	public struct InvalidState:Sendable, Swift.Error {}
 	
 	/// represents the various stages the client may be in 
@@ -68,7 +69,7 @@ public final actor Client:Sendable, Service {
 		didSet {
 			// i chose not to check if the new value is the same as the old value, because i do not want to add the overhead of a comparison to this code.
 			if self.stateContinuation != nil {
-				self.logger?.trace("yielding async connection stage: \(currentState)")
+				self.logger?.trace("yielding async connection state: \(currentState)")
 				self.stateContinuation!.yield(currentState)
 			}
 		}
