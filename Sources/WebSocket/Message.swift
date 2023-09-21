@@ -5,8 +5,7 @@ import NIOCore
 
 import cweb
 
-public struct Message:Sendable {
-
+public struct Message {
 	/// represents a complete binary message
 	public enum Outbound:Sendable {
 		/// represents a complete binary message
@@ -22,8 +21,8 @@ public struct Message:Sendable {
 		/// - parameter 1: the promise to fulfill when the corresponding pong frame is received
 		case newPing(EventLoopPromise<Double>?)
 
-		/// request that the remote peer close the connection gracefully
-		case gracefulDisconnect
+		/// initiates a closure request to the remote peer.
+		case gracefulDisconnect(UInt16?, String?)
 	}
 
 	/// represents a complete binary message
@@ -47,6 +46,12 @@ public struct Message:Sendable {
 		/// represents a ping frame that was received from the remote peer.
 		/// - parameter 1: the promise that will fulfill when the corresponding pong frame is successfully sent
 		case ping(EventLoopFuture<Double>)
+
+		/// the remote peer has requested that the connection be closed gracefully.
+		/// - parameter 1: the status code that the remote peer has requested the connection be closed with.
+		/// - parameter 2: the reason that the remote peer has requested the connection be closed with.
+		/// - parameter 3: the promise that the downstream consumer will use to signal that they are ready to reciprocate the closure message.
+		case gracefulDisconnect(UInt16?, String?, EventLoopPromise<Void>)
 	}
 	
 	/// type of sequence

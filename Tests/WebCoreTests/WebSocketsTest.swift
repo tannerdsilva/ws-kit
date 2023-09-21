@@ -13,10 +13,16 @@ final class WebSocketClientTests:XCTestCase {
 		var newLogger = Logger(label:"test")
 		newLogger.logLevel = .trace
 		let newURL = URL("wss://relay.damus.io")
-		// let newHeaders = HTTPHeaders([("Host", "\(newURL)")])
-		let newConfiguration = Client.Configuration(timeouts:Client.Configuration.Timeouts(), limits:Client.Configuration.Limits(), tlsConfiguration: TLSConfiguration.makeClientConfiguration())
-		let cap = Capper(log:newLogger)
-		let newHandlers:[NIOCore.ChannelHandler] = [cap]
-		let connect = try await Client.connect(log:newLogger, url:newURL, headers:[:], configuration:newConfiguration, on:newEventLoop, handlers:newHandlers).get()
+		let newClient = try WebSocket.Client(url:newURL, configuration:WebSocket.Client.Configuration(), on:newEventLoop, log:newLogger)
+		try await withThrowingTaskGroup(of:Void.self) { group in
+			group.addTask {
+				try await newClient.run()
+			}
+			group.addTask {
+				await Task.sleep(5 * 1000 * 1000 * 1000)
+				try await newClient.initiateSafeClosure()
+			}
+			try await group.waitForAll()
+		}
 	}
 }

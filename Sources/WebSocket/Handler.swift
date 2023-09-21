@@ -5,29 +5,36 @@ import NIOWebSocket
 import Logging
 
 import cweb
-import WebCore
+import struct WebCore.Date
+import struct WebCore.URL
 
 /// handles the merging of WebSocket frames into a single data type for the user
 /// - abstracts ping/pong logic entirely.
 /// - abstracts away the fragmentation of WebSocket frames
 /// - abstracts away frame types. a default written frame type can be specified, however, all inbound data is treated the same (as a ByteBuffer)
 internal final class Handler:ChannelDuplexHandler {
-	/// how long is the randomly generated ping data?
+	/// represents an internal error that should never be thrown. this is used to represent a fatal error that should never be thrown.
+	internal struct WSHandlerInternalError:Sendable, Swift.Error {}
+
+	/// how long is the randomly generated ping data sent by ?
 	private static let pingDataSize:size_t = 4
 
+	/// the label for the logger that is used by this handler
+	private static let loggerLabel = "ws-client.ctx-active.handler"
+
 	// io types for nio
-	public typealias InboundIn = WebSocketFrame
-	public typealias InboundOut = Message.Inbound
-	public typealias OutboundIn = Message.Outbound
-	public typealias OutboundOut = WebSocketFrame
+	internal typealias InboundIn = WebSocketFrame
+	internal typealias InboundOut = Message.Inbound
+	internal typealias OutboundIn = Message.Outbound
+	internal typealias OutboundOut = WebSocketFrame
 	
 	// ping/pong & health related variables and controls
 	/// assigned to a given ByteBuffer when a ping is sent. when this the case, the contained data represents the data sent in the ping, and expected to be returned.
-	private var waitingOnPong:[UInt8]? = nil
+	private var waitingOnPong:Int? = nil
 	/// the task that is used to schedule the next ping. this also as a timeout handler. this should never be nil when the handler is added to the channel (although tasks may be cancelled)
 	private var autoPingTask:Scheduled<Void>?
 	
-	// frame parsing mechanics
+	/// frame parsing mechanics
 	private enum FrameParsingState {
 		/// there is no existing frame fragments in the channel.
 		case idle
@@ -36,7 +43,22 @@ internal final class Handler:ChannelDuplexHandler {
 		/// switches to this mode when the maximum frame size is exceeded and parsing should pause until a fin is received.
 		case waitingForNextFrame
 	}
-	private var frameParsingMode:FrameParsingState = .idle
+	/// the connection stage of this handler. this is used to determine if certain actions are valid, and the memory associated.
+	private enum ConnectionStage {
+		/// the handler is not connected to a remote peer.
+		case awaitingConnection
+		/// the handler is connected to a remote peer.
+		/// - parameter 1: the current parsing mode of the handler.
+		case connected(FrameParsingState)
+		/// the remote peer has initiated a graceful closure of the connection. a responding close frame should be sent, but has not at this point.
+		case remoteClosing(UInt16?, String?)
+		/// the user has initiated a graceful closure of the connection. a responding close frame should be sent by our peer, but has not at this point.
+		case userClosing(FrameParsingState, UInt16?, String?)
+		/// the connection has been closed and the handler is no longer valid.
+		case disconnected
+	}
+	// the current connection stage of this handler.
+	private var stage = ConnectionStage.awaitingConnection
 
 	/// used to track the dates that pings were sent. this is used to calculate the round trip time of a ping.
 	private var pingDates:[[UInt8]:WebCore.Date]
@@ -51,46 +73,67 @@ internal final class Handler:ChannelDuplexHandler {
 	internal let healthyConnectionTimeout:TimeAmount
 
 	/// logger for this instance
-	internal let logger:Logger
+	internal let logger:Logger?
 
 	/// initialize a new handler for use above a websocket channel handler
-	internal init(log:Logger, surl:URL.Split, maxMessageSize:size_t, maxFrameSize:size_t, healthyConnectionThreshold:TimeAmount) {
+	internal init(log:Logger?, surl:URL.Split, maxMessageSize:size_t, maxFrameSize:size_t, healthyConnectionThreshold:TimeAmount) {
 		self.maxMessageSize = maxMessageSize
 		self.maxFrameSize = maxFrameSize
 		self.healthyConnectionTimeout = healthyConnectionThreshold
-		var modLog = log
-		modLog[metadataKey: "url"] = "\(surl.host)\(surl.pathQuery)"
-		self.logger = modLog
+		var modLogger = log
+		if log != nil {
+			modLogger![metadataKey:"ctx"] = "handler"
+		}
+		self.logger = modLogger
 		self.pingDates = [:]
 		self.pongPromises = [:]
 	}
 
 	/// initiates auto ping functionality on the connection. 
-	private func initiateAutoPing(context:ChannelHandlerContext, interval:TimeAmount) {
+	private func _initiateAutoPing(context:ChannelHandlerContext, interval:TimeAmount) {
 		// cancel the existing task, if it exists.
 		if self.autoPingTask != nil {
-			self.logger.trace("cancelling previously scheduled ping.")
+			self.logger?.trace("cancelling previously scheduled ping.")
 			self.autoPingTask!.cancel()
 		}
 
 		// schedule the next ping task
 		self.autoPingTask = context.eventLoop.scheduleTask(in: interval) {
 			if self.waitingOnPong != nil {
-				self.logger.critical("did not receive pong from previous ping sent. closing channel...", metadata:["prev_ping_id": "\(self.waitingOnPong.hashValue))"])
+				self.logger?.notice("did not receive pong from previous ping sent. closing channel...", metadata:["prev_ping_id": "\(self.waitingOnPong.hashValue))"])
 				// we never received a pong from our last ping, so the connection has timed out
-				context.fireErrorCaught(Error.WebSocket.connectionTimeout)
+				context.fireErrorCaught(Error.connectionTimeout)
 			} else {
-				self.sendPing(context:context, pongPromise:nil).whenFailure { err in
-					self.logger.critical("failed to send ping: '\(err)'")
-					_ = context.close()
+				switch self.stage {
+					case .awaitingConnection:
+						self.logger?.critical("attempted to fire auto ping while awaiting connection. this is indicative of a fatal internal error.")
+						context.fireErrorCaught(WSHandlerInternalError())
+						return
+					case .connected(_):
+						self._sendPing(context:context, registerCorrespondingPongPromise:nil).whenFailure { err in
+							self.logger?.critical("failed to send ping: '\(err)'")
+							_ = context.close()
+						}
+						self._initiateAutoPing(context:context, interval:interval)
+					case .userClosing(_, _, _):
+						// auto ping should not proceed when closing is in progress.
+						fallthrough;
+					case .remoteClosing(_, _):
+						// auto ping should not proceed when closing is in progress.
+						self.logger?.notice("attempted to fire auto ping while closing connection. ping will not be sent.")
+						break;
+					case .disconnected:
+						self.logger?.critical("attempted to fire auto ping while disconnected.")
+						context.fireErrorCaught(WSHandlerInternalError())
+						return
 				}
-				self.initiateAutoPing(context:context, interval: interval)
 			}
 		}
-		self.logger.debug("scheduled next ping to send in \(interval.nanoseconds / (1000 * 1000 * 1000))s.")
+
+		self.logger?.debug("scheduled next ping to send in \(interval.nanoseconds / (1000 * 1000 * 1000))s.")
 	}
 
-	private func sendUnsolicitedPong(context:ChannelHandlerContext) -> EventLoopFuture<Void> {
+	private func _sendUnsolicitedPong(context:ChannelHandlerContext) -> EventLoopFuture<Void> {
 		// define a new random byte sequence to use for this ping. this will define the "ping id"
 		let rdat = (0..<Self.pingDataSize).map { _ in UInt8.random(in: 0...255) }
 		
@@ -109,17 +152,17 @@ internal final class Handler:ChannelDuplexHandler {
 		// debug it
 		writePromise.futureResult.whenComplete({
 			switch $0 {
-			case .success:
-				self.logger.debug("sent pong.", metadata:["pong_id": "\(rdat.hashValue)"])
-			case .failure(let error):
-				self.logger.error("failed to send pong: '\(error)'", metadata:["pong_id": "\(rdat.hashValue)"])
+				case .success:
+					self.logger?.debug("sent pong.", metadata:["pong_id": "\(rdat.hashValue)"])
+				case .failure(let error):
+					self.logger?.error("failed to send pong: '\(error)'", metadata:["pong_id": "\(rdat.hashValue)"])
 			}
 		})
 		return writePromise.futureResult
 	}
 	
 	/// the only valid way to send a ping to the remote peer.
-	private func sendPing(context:ChannelHandlerContext, pongPromise:EventLoopPromise<Double>?) -> EventLoopFuture<Void> {
+	private func _sendPing(context:ChannelHandlerContext, registerCorrespondingPongPromise:EventLoopPromise<Double>?) -> EventLoopFuture<Void> {
 		// define a new random byte sequence to use for this ping. this will define the "ping id"
 		let rdat = (0..<Self.pingDataSize).map { _ in UInt8.random(in: 0...255) }
 		
@@ -133,43 +176,43 @@ internal final class Handler:ChannelDuplexHandler {
 
 		// write it.
 		let writeAndFlushFuture = context.writeAndFlush(wrapOutboundOut(newFrame))
-		return writeAndFlushFuture.always { result in
+		writeAndFlushFuture.whenComplete { result in
 			switch result {
 			case .success:
 				if (self.waitingOnPong == nil) {
-					self.logger.trace("upcoming ping will be used to evaluate connection health.", metadata:["ping_id":"\(rdat.hashValue)"])
-					self.waitingOnPong = rdat
+					self.logger?.trace("upcoming pong will be used to evaluate connection health.", metadata:["ping_id":"\(rdat.hashValue)"])
+					self.waitingOnPong = rdat.hashValue
 				}
-				let newDate = WebCore.Date(localTime:false)
+				let newDate = WebCore.Date()
 				self.pingDates[rdat] = newDate
-				if pongPromise != nil {
-					self.pongPromises[rdat] = pongPromise!
+				if registerCorrespondingPongPromise != nil {
+					self.pongPromises[rdat] = registerCorrespondingPongPromise!
 				}
-				self.logger.info("sent ping.", metadata:["ping_id":"\(rdat.hashValue)"])
+				self.logger?.debug("sent ping.", metadata:["ping_id":"\(rdat.hashValue)"])
 				break;
 			case .failure(let error):
-				self.logger.error("failed to send ping: '\(error)'")
+				self.logger?.error("failed to send ping: '\(error)'")
 				break;
 			}
 		}
-
+		return writeAndFlushFuture
 	}
 
 	/// the only way to handle data frames from the remote peer. this function is only designed to support frames that are TEXT or BINARY based.
 	/// - WARNING: this function will throw a fatal error and crash your program immediately if an invalid frame type is passed
-	private func handleFrame(_ frame:InboundIn, context:ChannelHandlerContext) {
-		switch self.frameParsingMode {
+	private func _handleFrame(_ frame:InboundIn, parsingMode:inout FrameParsingState, context:ChannelHandlerContext) {
+		switch parsingMode {
 			// there are existing frame fragments in the channel.
 			case .existingFrameFragments(var existingFrame):
 				// verify that the current fragment matches the existing frame type.
 				guard existingFrame.type.opcode() == frame.opcode else {
-					self.logger.notice("received frame with opcode \(frame.opcode) but existing frame is of type \(existingFrame.type).")
+					self.logger?.notice("received frame with opcode \(frame.opcode) but existing frame is of type \(existingFrame.type).")
 					// throw an informative error based on the RFC 6455 violation.
 					switch frame.fin {
 						case false:
-							context.fireErrorCaught(Error.WebSocket.rfc6455Violation(.fragmentControlViolation(.streamOpcodeMismatch(existingFrame.type.opcode(), frame.opcode))))
+							context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.streamOpcodeMismatch(existingFrame.type.opcode(), frame.opcode))))
 						case true:
-							context.fireErrorCaught(Error.WebSocket.rfc6455Violation(.fragmentControlViolation(.initiationWithUnfinishedContext)))
+							context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.initiationWithUnfinishedContext)))
 					}
 					return
 				}
@@ -178,7 +221,7 @@ internal final class Handler:ChannelDuplexHandler {
 					case true:
 						// flush the data because the continued data stream has been finished
 						existingFrame.append(frame)
-						self.frameParsingMode = .idle
+						parsingMode = .idle
 						let combinedResult = existingFrame.exportInboundMessage()
 						context.fireChannelRead(self.wrapInboundOut(combinedResult))
 						return
@@ -186,25 +229,29 @@ internal final class Handler:ChannelDuplexHandler {
 						// append the data to the existing frame
 						existingFrame.append(frame)
 						guard existingFrame.size <= self.maxMessageSize else {
-							self.logger.notice("frame sequence exceeded byte limit of \(self.maxMessageSize). waiting for next frame sequence before continuing.")
-							self.frameParsingMode = .waitingForNextFrame
+							self.logger?.notice("frame sequence exceeded byte limit of \(self.maxMessageSize). waiting for next frame sequence before continuing.")
+							parsingMode = .waitingForNextFrame
 							return
 						}
-						self.frameParsingMode = .existingFrameFragments(existingFrame)
+						parsingMode = .existingFrameFragments(existingFrame)
 				}
 				break;
+
 			// this is the first frame in a (possible) sequence).
 			case .idle:
+				// make a new frame
 				var newFrame = Message(type:Message.SequenceType(opcode:frame.opcode)!)
+
+				// append the contents of the frame
 				newFrame.append(frame)
 
 				guard newFrame.size <= self.maxMessageSize else {
-					self.logger.notice("frame sequence exceeded byte limit of \(self.maxMessageSize). waiting for next frame sequence before continuing.")
+					self.logger?.notice("frame sequence exceeded byte limit of \(self.maxMessageSize). waiting for next frame sequence before continuing.")
 					switch frame.fin {
 						case true:
-							self.frameParsingMode = .idle
+							parsingMode = .idle
 						case false:
-							self.frameParsingMode = .waitingForNextFrame
+							parsingMode = .waitingForNextFrame
 					}
 					return
 				}
@@ -214,14 +261,14 @@ internal final class Handler:ChannelDuplexHandler {
 						context.fireChannelRead(self.wrapInboundOut(combinedResult))
 						return
 					case false:
-						self.frameParsingMode = .existingFrameFragments(newFrame)
+						parsingMode = .existingFrameFragments(newFrame)
 				}
 				break;
 			// the maximum data length for this stream has been tripped
 			case .waitingForNextFrame:
 				switch frame.fin {
 					case true:
-						self.frameParsingMode = .idle
+						parsingMode = .idle
 					case false:
 						break;
 				}
@@ -230,230 +277,482 @@ internal final class Handler:ChannelDuplexHandler {
 	}
 
 	internal func handlerAdded(context:ChannelHandlerContext) {
-		self.logger.info("connected.")
-		self.waitingOnPong = nil
-		self.sendPing(context:context, pongPromise:nil).whenFailure { initialPingFailure in
-			self.logger.critical("failed to send initial ping.", metadata:["error": "\(initialPingFailure)"])
-			context.fireErrorCaught(Error.WebSocket.failedToWriteInitialPing(initialPingFailure))
+		switch stage {
+			// this is the only valid path forward
+			case .awaitingConnection:
+				self.logger?.info("connected. (handler added).")
+				self.stage = .connected(.idle)
+				self.waitingOnPong = nil
+				self._initiateAutoPing(context:context, interval:self.healthyConnectionTimeout)
+
+			// all invalid paths - all indicate a fatal internal error
+			case .connected(_):
+				fallthrough;
+			case .userClosing(_, _, _):
+				fallthrough;
+			case .remoteClosing(_, _):
+				fallthrough;
+			case .disconnected:
+				self.logger?.critical("handler connected while in an invalid stage. this is indicative of a fatal internal error.", metadata:["stage":"\(stage)"])
+				context.fireErrorCaught(WSHandlerInternalError())
+				break;
 		}
-		self.initiateAutoPing(context: context, interval:self.healthyConnectionTimeout)
-		self.frameParsingMode = .idle
 	}
 
 	internal func handlerRemoved(context:ChannelHandlerContext) {
-		self.logger.info("disconnected.")
-		self.autoPingTask?.cancel()
-		self.autoPingTask = nil
-		self.waitingOnPong = nil
-		self.pingDates = [:]
-		self.pongPromises = [:]
+		switch stage {
+			// invalid path, this is indicative of a fatal internal error
+			case .awaitingConnection:
+				self.logger?.critical("handler removed while awaiting connection. this is indicative of a fatal internal error.")
+				context.fireErrorCaught(WSHandlerInternalError())
+
+			case .connected(_):
+				self.logger?.notice("disconnected unexpectedly.")
+				stage = .disconnected
+				self.autoPingTask?.cancel()
+				self.autoPingTask = nil
+				self.waitingOnPong = nil
+				self.pingDates = [:]
+				self.pongPromises = [:]
+
+			case .userClosing(_, _, _):
+				self.logger?.info("disconnected gracefully by user.")
+				stage = .disconnected
+				self.autoPingTask?.cancel()
+				self.autoPingTask = nil
+				self.waitingOnPong = nil
+				self.pingDates = [:]
+				self.pongPromises = [:]
+			
+			case .remoteClosing(_, _):
+				self.logger?.info("disconnected gracefully by remote.")
+				stage = .disconnected
+				self.autoPingTask?.cancel()
+				self.autoPingTask = nil
+				self.waitingOnPong = nil
+				self.pingDates = [:]
+				self.pongPromises = [:]
+
+			case .disconnected:
+				self.logger?.trace("handler removed.")
+		}
 	}
 
 	/// read hook
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		// get the frame
 		let frame:InboundIn = self.unwrapInboundIn(data)
-				
-		// handle the frame
-		switch frame.opcode {
+		// the function that will process the frame	based on the current parsing mode.
+		enum ClosingState {
+			case notClosing
+			case userClosing(UInt16?, String?)
+		}
 
-			// pong data. this is a control frame and is handled differently than a data frame.
-			case .pong:
-				// capture the time that this pong was received
-				let captureDate = WebCore.Date(localTime:false)
+		// the function that will process the frame under "normal operating procedures". 
+		// it is assumed the stage will remain the same and the function can only write to the inout parsingMode unless a completely different stage is returned.
+		func _parse(mode parsingMode:inout FrameParsingState, closeState:ClosingState) -> ConnectionStage? {
+			// handle the frame
+			switch frame.opcode {
 
-				guard frame.fin == true else {
-					self.logger.critical("got fragmented pong frame.")
-					context.fireErrorCaught(Error.WebSocket.rfc6455Violation(.fragmentControlViolation(.fragmentedPongReceived)))
-					return
-				}
+				// pong data. this is a control frame and is handled differently than a data frame.
+				case .pong:
+					// capture the time that this pong was received
+					let captureDate = WebCore.Date()
 
-				// get the ping id
-				let pongID = Array(frame.data.readableBytesView)
-
-				// this may or may not be an unsolicited pong. so the handling here is conditional based on greater context of the connection.
-				switch self.pingDates.removeValue(forKey:pongID) {
-					case nil:
-						// we were not waiting for a pong but we got one anyways. RFC 6455 allows for unsolicited pongs with no guidelines on body content.
-						// in this case, we will (of course) support RFC 6455's possibility of unsolicited pongs. we will require that this pong be empty or less than 125 bytes.
-						guard frame.data.readableBytes <= 125 else {
-							self.logger.critical("received unsolicited pong with payload larger than 125 bytes.")
-							context.fireErrorCaught(Error.WebSocket.RFC6455Violation.pongPayloadTooLong)
-							return
-						}
-						
-						self.logger.debug("got pong (unsolicited).")
-						
-						// unsolicited pongs will reset the internal timeout mechanism
-						if self.autoPingTask != nil {
-							self.initiateAutoPing(context:context, interval:self.healthyConnectionTimeout)
-						}
-
-						// handle a future if it exists
-						let checkPromise = self.pongPromises[pongID]
-						if checkPromise != nil {
-							// checkPromise!.succeed(())
-							self.pongPromises.removeValue(forKey:pongID)
-						}
-
-						// create a new message for the next member in the pipeline
-						let newMessage = Message.Inbound.unsolicitedPong(pongID.hashValue)
-						context.fireChannelRead(self.wrapInboundOut(newMessage))
-
-					case .some(let sendDate):
-
-						// announce and clear.
-						self.logger.debug("got pong (solicited).", metadata:["ping_id": "\(pongID.hashValue)"])
-						if (self.waitingOnPong == pongID) {
-							self.logger.trace("this pong was in response to the routine ping that is used to evaluate connection health.")
-							self.waitingOnPong = nil
-						}
-
-						// calculate the round trip time
-						let rtt = captureDate.timeIntervalSince(sendDate)
-
-						// handle a future if it exists
-						let checkPromise = self.pongPromises[pongID]
-						if checkPromise != nil {
-							// checkPromise!.succeed(())
-							self.pongPromises.removeValue(forKey:pongID)
-						}
-
-						// create a new message for the next member in the pipeline
-						let newMessage = Message.Inbound.solicitedPong(rtt, pongID.hashValue)
-						context.fireChannelRead(self.wrapInboundOut(newMessage))
-				}
-
-			// ping data. this is a control frame and is handled differently than a data frame.
-			case .ping:
-				// capture the time that this pong was received
-				let captureDate = WebCore.Date(localTime:false)
-
-				guard frame.fin == true else {
-					self.logger.critical("got fragmented ping frame.")
-					context.fireErrorCaught(Error.WebSocket.rfc6455Violation(.fragmentControlViolation(.fragmentedPingReceived)))
-					return
-				}
-
-				// create a new frame with the masking key
-				let wsMask = WebSocketMaskingKey.random()
-				let responsePong = WebSocketFrame(fin:true, opcode:.pong, maskKey:wsMask, data:frame.unmaskedData)
-
-				// write it
-				let writePromise = context.eventLoop.makePromise(of:Void.self)
-				context.writeAndFlush(self.wrapOutboundOut(responsePong), promise:writePromise)
-
-				let writeCompletePromise = context.eventLoop.makePromise(of:Double.self)
-
-				// debug it
-				let asArray = Array(frame.unmaskedData.readableBytesView)
-				self.logger.debug("got ping.", metadata:["ping_id": "\(asArray.hashValue)"])
-				writePromise.futureResult.whenComplete({ [wcp = writeCompletePromise] in
-					switch $0 {
-					case .success:
-						let writeTime = WebCore.Date(localTime:false)
-						let rtt = captureDate.timeIntervalSince(writeTime)
-						wcp.succeed(rtt)
-						self.logger.debug("sent pong.", metadata:["ping_id": "\(asArray.hashValue)"])
-					case .failure(let error):
-						wcp.fail(error)
-						self.logger.error("failed to send pong: '\(error)'", metadata:["ping_id": "\(asArray.hashValue)"])
+					guard frame.fin == true else {
+						self.logger?.critical("got fragmented pong frame.")
+						context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.fragmentedPongReceived)))
+						return nil
 					}
-				})
 
-				// create a new message for the next member in the pipeline
-				let newMessage = Message.Inbound.ping(writeCompletePromise.futureResult)
-				context.fireChannelRead(self.wrapInboundOut(newMessage))
+					// get the ping id
+					let pongID = Array(frame.data.readableBytesView)
 
-			// text or binary stream
-			case .text:
-				fallthrough;
-			case .binary:
-				self.handleFrame(frame, context:context)
-
-			case .continuation:
-				switch self.frameParsingMode {
-					case .existingFrameFragments(var existingFrame):
-
-						// verify that the current fragment matches the existing frame type.
-						guard existingFrame.type.opcode() == frame.opcode else {
-							self.logger.critical("received frame with opcode \(frame.opcode) but existing frame is of type \(existingFrame.type).")
-							// throw an informative error based on the RFC 6455 violation.
-							switch frame.fin {
-								case false:
-									context.fireErrorCaught(Error.WebSocket.rfc6455Violation(.fragmentControlViolation(.streamOpcodeMismatch(existingFrame.type.opcode(), frame.opcode))))
-								case true:
-									context.fireErrorCaught(Error.WebSocket.rfc6455Violation(.fragmentControlViolation(.initiationWithUnfinishedContext)))
+					// this may or may not be an unsolicited pong. so the handling here is conditional based on greater context of the connection.
+					switch self.pingDates.removeValue(forKey:pongID) {
+						case nil:
+							// we were not waiting for a pong but we got one anyways. RFC 6455 allows for unsolicited pongs with no guidelines on body content.
+							// in this case, we will (of course) support RFC 6455's possibility of unsolicited pongs. we will require that this pong be empty or less than 125 bytes.
+							guard frame.data.readableBytes <= 125 else {
+								self.logger?.critical("received unsolicited pong with payload larger than 125 bytes.")
+								context.fireErrorCaught(Error.RFC6455Violation.pongPayloadTooLong)
+								return nil
 							}
-							return
+							
+							self.logger?.debug("got pong (unsolicited).")
+							
+							// unsolicited pongs will reset the internal timeout mechanism
+							if self.autoPingTask != nil {
+								self._initiateAutoPing(context:context, interval:self.healthyConnectionTimeout)
+							}
+
+							// handle a future if it exists
+							let checkPromise = self.pongPromises[pongID]
+							if checkPromise != nil {
+								// checkPromise!.succeed()
+								self.pongPromises.removeValue(forKey:pongID)
+							}
+
+							// create a new message for the next member in the pipeline
+							let newMessage = Message.Inbound.unsolicitedPong(pongID.hashValue)
+							context.fireChannelRead(self.wrapInboundOut(newMessage))
+
+						case .some(let sendDate):
+
+							// announce and clear.
+							self.logger?.debug("got pong (solicited).", metadata:["ping_id": "\(pongID.hashValue)"])
+							if (self.waitingOnPong == pongID.hashValue) {
+								self.logger?.trace("this pong was in response to the routine ping that is used to evaluate connection health.", metadata:["ping_id": "\(pongID.hashValue)"])
+								self.waitingOnPong = nil
+							}
+
+							// calculate the round trip time
+							let rtt = captureDate.timeIntervalSince(sendDate)
+
+							// handle a future if it exists
+							let checkPromise = self.pongPromises[pongID]
+							if checkPromise != nil {
+								// checkPromise!.succeed(())
+								self.pongPromises.removeValue(forKey:pongID)
+							}
+
+							// create a new message for the next member in the pipeline
+							let newMessage = Message.Inbound.solicitedPong(rtt, pongID.hashValue)
+							context.fireChannelRead(self.wrapInboundOut(newMessage))
+					}
+
+					return nil // do not change stage
+
+				// ping data. this is a control frame and is handled differently than a data frame.
+				case .ping:
+					// capture the time that this pong was received
+					let captureDate = WebCore.Date()
+					guard frame.fin == true else {
+						self.logger?.critical("got fragmented ping frame.")
+						context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.fragmentedPingReceived)))
+						return nil
+					}
+
+					// create a new frame with the masking key
+					let wsMask = WebSocketMaskingKey.random()
+					let responsePong = WebSocketFrame(fin:true, opcode:.pong, maskKey:wsMask, data:frame.unmaskedData)
+
+					// write it
+					let writePromise = context.eventLoop.makePromise(of:Void.self)
+					context.writeAndFlush(self.wrapOutboundOut(responsePong), promise:writePromise)
+
+					let writeCompletePromise = context.eventLoop.makePromise(of:Double.self)
+
+					// debug it
+					let asArray = Array(frame.unmaskedData.readableBytesView)
+					self.logger?.debug("got ping.", metadata:["ping_id": "\(asArray.hashValue)"])
+					writePromise.futureResult.whenComplete({ [wcp = writeCompletePromise] in
+						switch $0 {
+						case .success:
+							let writeTime = WebCore.Date()
+							let rtt = captureDate.timeIntervalSince(writeTime)
+							wcp.succeed(rtt)
+							self.logger?.debug("sent pong.", metadata:["ping_id": "\(asArray.hashValue)"])
+						case .failure(let error):
+							wcp.fail(error)
+							self.logger?.error("failed to send pong: '\(error)'", metadata:["ping_id": "\(asArray.hashValue)"])
 						}
+					})
 
-						// this is a valid continuation. so now, handle it apropriately.
-						existingFrame.append(frame)
-						self.frameParsingMode = .existingFrameFragments(existingFrame)
+					// create a new message for the next member in the pipeline
+					let newMessage = Message.Inbound.ping(writeCompletePromise.futureResult)
+					context.fireChannelRead(self.wrapInboundOut(newMessage))
 
-					case .idle:
-						self.logger.critical("got continuation frame, but there is no existing frame to append to.")
-						context.fireErrorCaught(Error.WebSocket.rfc6455Violation(.fragmentControlViolation(.continuationWithoutContext)))
-						return
-					case .waitingForNextFrame:
-					break;
+					return nil // do not change stage
+
+				// text or binary stream
+				case .text:
+					fallthrough;
+				case .binary:
+					self._handleFrame(frame, parsingMode:&parsingMode, context:context)
+					return nil // do not change stage
+				
+				case .continuation:
+					switch parsingMode {
+						case .existingFrameFragments(var existingFrame):
+							// verify that the current fragment matches the existing frame type.
+							guard existingFrame.type.opcode() == frame.opcode else {
+								self.logger?.critical("received frame with opcode \(frame.opcode) but existing frame is of type \(existingFrame.type).")
+								// throw an informative error based on the RFC 6455 violation.
+								switch frame.fin {
+									case false:
+										context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.streamOpcodeMismatch(existingFrame.type.opcode(), frame.opcode))))
+									case true:
+										context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.initiationWithUnfinishedContext)))
+								}
+								return nil
+							}
+
+							// this is a valid continuation. so now, handle it apropriately.
+							existingFrame.append(frame)
+							parsingMode = .existingFrameFragments(existingFrame)
+							self.logger?.trace("appended continuation frame to existing frame.")
+
+						case .idle:
+							self.logger?.critical("got continuation frame, but there is no existing frame to append to.")
+							context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.continuationWithoutContext)))
+
+						case .waitingForNextFrame:
+							self.logger?.critical("got continuation frame, but there is no existing frame to append to.")
+							context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.continuationWithoutContext)))
+					}
+
+					return nil // do not change stage
+
+				case .connectionClose:
+					// mutate the frame data so we can read it
+					var frameData = frame.data
+
+					// read the close code, if it exists
+					let closeCode:UInt16?
+					if frame.data.readableBytes >= 2 {
+						closeCode = frameData.readInteger(endianness:.big, as:UInt16.self)
+					} else {
+						closeCode = nil
+					}
+					// read the close description, if it exists
+					let closeDescription:String?
+					if frame.data.readableBytes > 0 {
+						closeDescription = frameData.readString(length:frameData.readableBytes)
+					} else {
+						closeDescription = nil
+					}
+
+					// determine what to do with this close frame based on the current connection stage.
+					switch closeState {
+						// the user has already initiated the close handshake. this should be a response to that.
+						case .userClosing(let intCode, let intDesc):
+							// validate that the response matches the request
+							guard closeCode == intCode else {
+								context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.closeCodeMismatch(closeCode, intCode))))
+								return nil
+							}
+							guard closeDescription == intDesc else {
+								context.fireErrorCaught(Error.rfc6455Violation(.fragmentControlViolation(.closeReasonMismatch(closeDescription, intDesc))))
+								return nil
+							}
+							// the connection is now closed.
+							self.logger?.info("connection closed gracefully by remote peer.")
+							return .disconnected
+						
+						// the user has not initiated the close handshake. this is a request to close the connection, initiated by remote peer.
+						case .notClosing:
+							// first, determine the length of the body based on the info found in the frame.
+							let writeBuffer:ByteBuffer
+							switch (closeCode, closeDescription) {
+								case (.some(let code), .some(let desc)):
+									let length = 2 + desc.utf8.count
+									var wb = context.channel.allocator.buffer(capacity:length)
+									wb.writeInteger(code, endianness:.big, as:UInt16.self)
+									wb.writeString(desc)
+									writeBuffer = wb
+								case (.some(let code), .none):
+									let length = 2
+									var wb = context.channel.allocator.buffer(capacity:length)
+									wb.writeInteger(code, endianness:.big, as:UInt16.self)
+									writeBuffer = wb
+								case (.none, .some(_)):
+									context.fireErrorCaught(Error.rfc6455Violation(.missingCloseCodeForDescription(closeDescription!)))
+									return nil
+								case (.none, .none):
+									writeBuffer = context.channel.allocator.buffer(capacity:0)
+							}
+
+							self.logger?.debug("got disconnect signal from remote peer. initiating close (no more data will be writable). waiting on downstream peers to continue with closure...", metadata:["close_code": "\(String(describing:closeCode))", "close_description": "\(String(describing:closeDescription))"])
+							
+							// make the promise that will be fulfilled when the peers downstream are ready for the closure handshake to complete.
+							let responsePromise = context.eventLoop.makePromise(of:Void.self)
+							responsePromise.futureResult.whenComplete { _ in
+								self.logger?.trace("...downstream peers are ready for the connection to close. sending corresponding close frame.")
+								
+								// build the response frame that will be sent later.
+								let maskingFrame = WebSocketMaskingKey.random()
+								let responseFrame = WebSocketFrame(fin:true, opcode:.connectionClose, maskKey:maskingFrame, data:writeBuffer)
+								let outboundOut = self.wrapOutboundOut(responseFrame)
+								
+								// after the response frame is sent, close the channel.
+								context.writeAndFlush(outboundOut).whenComplete { writeRes in
+									switch writeRes {
+										case .success:
+											self.logger?.trace("sent close frame.")
+											context.close(promise:nil)
+										case .failure(let error):
+											self.logger?.error("failed to send close frame: '\(error)'")
+											context.close(promise:nil)
+									}
+								}
+							}
+
+							// create a new message for the next member in the pipeline so that they can prepare the channel for closing.
+							let newMessage = Message.Inbound.gracefulDisconnect(closeCode, closeDescription, responsePromise)
+							context.fireChannelRead(self.wrapInboundOut(newMessage))
+
+							return .remoteClosing(closeCode, closeDescription)
+					}
+					
+					// stage always changes
+			default:
+				context.fireErrorCaught(Error.opcodeNotSupported(frame.opcode))
+				return nil // do not change stage
+			}
+		}
+
+		switch stage {
+			case .awaitingConnection:
+				context.fireErrorCaught(WSHandlerInternalError())
+				return
+			
+			case .connected(var parsingMode):
+				let changeStage = _parse(mode:&parsingMode, closeState:.notClosing)
+				if changeStage != nil {
+					// change the stage
+					self.stage = changeStage!
+				} else {
+					// write the new parsing mode back to storage of the same stage
+					self.stage = .connected(parsingMode)
 				}
+				return
 
-			case .connectionClose:
-				context.channel.close(mode:.all, promise:nil)
+			case .remoteClosing(_, _):
+				self.logger?.critical("received frame while remote peer is closing.")
+				context.fireErrorCaught(WSHandlerInternalError())
+				return
 
-		default:
-			context.fireErrorCaught(Error.WebSocket.opcodeNotSupported(frame.opcode))
-			break
+			case .userClosing(var parsingMode, let closeCode, let closeDesc):
+				// the user has initiated a close on the connection but there is still some latent data that is coming in from the remote peer.
+				// we will intake the data as usual, in this circumstance.
+				let changeStage = _parse(mode:&parsingMode, closeState:.userClosing(closeCode, closeDesc))
+				if changeStage != nil {
+					self.stage = changeStage!
+				} else {
+					// write the new parsing mode back to storage of the same stage
+					self.stage = .userClosing(parsingMode, closeCode, closeDesc)
+				}
+				return
+
+			case .disconnected:
+				context.fireErrorCaught(WSHandlerInternalError())
+				return;
 		}
 	}
 
+	private func _writeFrameData(context:ChannelHandlerContext, opcode:WebSocketOpcode, data bytesToWrite:inout [UInt8], promise:EventLoopPromise<Void>?) {
+		guard bytesToWrite.count <= self.maxMessageSize else {
+			self.logger?.error("message size of \(bytesToWrite.count) exceeds byte limit of \(self.maxMessageSize).")
+			promise?.fail(Error.messageTooLarge)
+			return
+		}
+		var writeTotal = bytesToWrite.count
+		if writeTotal == 0 {
+			self.logger?.trace("no data to write.")
+			promise?.succeed(())
+			return
+		}
+		repeat {
+			// capture the next chunk
+			let chunkSize = min(writeTotal, self.maxFrameSize)
+			let chunk = bytesToWrite.prefix(chunkSize)
+			bytesToWrite.removeFirst(chunkSize)
+			writeTotal -= chunkSize
+			
+			// write the chunk to a new bytebuffer
+			var chunkBuffer = context.channel.allocator.buffer(capacity: chunkSize)
+			chunkBuffer.writeBytes(chunk)
+
+			// package the chunk into a frame
+			let isFin = writeTotal == 0
+			let maskingKey = WebSocketMaskingKey.random()
+			let frame = WebSocketFrame(fin:isFin, opcode:.binary, maskKey:maskingKey, data:chunkBuffer)
+
+			// write the frame with the appropriate promise handling and flushing based on the fin state.
+			if (isFin == true) {
+				context.writeAndFlush(self.wrapOutboundOut(frame)).cascade(to:promise)
+				self.logger?.trace("wrote and flushed final chunk.")
+			} else {
+				context.write(self.wrapOutboundOut(frame)).cascadeFailure(to:promise)
+				self.logger?.trace("writing frame chunk.")
+			}
+		} while writeTotal > 0
+	}
+  
 	// write hook
-	internal func write(context:ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
-		// get the message and export it so that it can be assembled and written.
+	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+		// get the message that we are going to write.
 		let message = self.unwrapOutboundIn(data)
-		// let writeBytes:[UInt8]
-		// switch message {
-		// 	case .text(let textToSend):
 
+		// act based on the current stage of the connection.
+		switch self.stage {
+			
+			// clearly invalid.
+			case .awaitingConnection:
+				self.logger?.critical("attempted to write data while awaiting connection establishment.")
+				context.fireErrorCaught(WSHandlerInternalError())
+				promise?.fail(WSHandlerInternalError())
+				return
+
+			// the only valid path forward.
+			case .connected(let frameData):
+				// get the message and export it so that it can be assembled and written.
+				switch message {
+					case .data(var bytesToWrite):
+						self.logger?.trace("writing \(bytesToWrite.count) bytes of data.")
+						self._writeFrameData(context:context, opcode:.binary, data:&bytesToWrite, promise:promise)
+					case .text(let textToSendAndEncode):
+						self.logger?.trace("writing \(textToSendAndEncode.utf8.count) bytes of text.")
+						var bytesToWrite = Array(textToSendAndEncode.utf8)
+						self._writeFrameData(context:context, opcode:.text, data:&bytesToWrite, promise:promise)
+					case .unsolicitedPong:
+						self._sendUnsolicitedPong(context:context).cascade(to:promise)
+					case .newPing(let pongResponsePromiseRegister):
+						self._sendPing(context:context, registerCorrespondingPongPromise:pongResponsePromiseRegister).cascade(to:promise)
+					case .gracefulDisconnect(let closeCode, let closeDescription):
 				
-		// 	case .data(let datToSend):
+						// assemble the complete body of the close frame.
+						let writeBuffer:ByteBuffer
+						switch (closeCode, closeDescription) {
+							case (.some(let code), .some(let desc)):
+								let length = 2 + desc.utf8.count
+								var wb = context.channel.allocator.buffer(capacity:length)
+								wb.writeInteger(code, endianness:.big, as:UInt16.self)
+								wb.writeString(desc)
+								writeBuffer = wb
+							case (.some(let code), .none):
+								let length = 2
+								var wb = context.channel.allocator.buffer(capacity:length)
+								wb.writeInteger(code, endianness:.big, as:UInt16.self)
+								writeBuffer = wb
+							case (.none, .some(_)):
+								context.fireErrorCaught(Error.rfc6455Violation(.missingCloseCodeForDescription(closeDescription!)))
+								return
+							case (.none, .none):
+								writeBuffer = context.channel.allocator.buffer(capacity:0)
+						}
+						
+						// package it into a frame and write it.
+						let maskingKey = WebSocketMaskingKey.random()
+						let frame = WebSocketFrame(fin:true, opcode:.connectionClose, maskKey:maskingKey, data:writeBuffer)
+						self.stage = .userClosing(frameData, closeCode, closeDescription)
+						context.writeAndFlush(self.wrapOutboundOut(frame)).cascade(to:promise)
+				}
 
-		// 	case .unsolicitedPong:
-		// 		self.sendPong(context:context).cascade(to:promise)
-		// 		break;
-			
-		// 	case .newPing(let continuation):
+			// since timing can never be perfect, we will not throw a channel error if a close handshake is in progress.
+			case .remoteClosing(_, _):
+				fallthrough
+			case .userClosing(_, _, _):
+				// fail the passed promise only.
+				promise?.fail(Error.connectionClosureInProgress)
+				return
 
-		// }
-		// /// validate the message size
-		// guard mesBytes.count <= self.maxMessageSize else {
-		// 	self.logger.warning("message size of \(mesBytes.count) exceeds byte limit of \(self.maxMessageSize).")
-		// 	promise?.fail(Error.WebSocket.messageTooLarge)
-		// 	return
-		// }
-		// while mesBytes.count > 0 {
-		// 	// get the next chunk
-		// 	let chunkSize = min(mesBytes.count, self.maxFrameSize)
-		// 	let chunk = mesBytes.prefix(chunkSize)
-		// 	mesBytes.removeFirst(chunkSize)
-			
-		// 	// write the chunk to a new bytebuffer
-		// 	var chunkBuffer = context.channel.allocator.buffer(capacity: chunkSize)
-		// 	chunkBuffer.writeBytes(chunk)
-
-		// 	// create a new websocket frame with the chunk
-		// 	let isFin = mesBytes.count == 0
-		// 	let maskingKey = WebSocketMaskingKey.random()
-		// 	let frame = WebSocketFrame(fin:isFin, opcode:op, maskKey:maskingKey, data:chunkBuffer)
-		// 	if isFin == false {
-		// 		// write the frame without flushing. any failures will cascade to the promise.
-		// 		context.write(self.wrapOutboundOut(frame)).cascadeFailure(to:promise)
-		// 	} else {
-		// 		// this is the final frame. flush it and cascade the result to the promise.
-		// 		context.writeAndFlush(self.wrapOutboundOut(frame), promise:promise)
-		// 	}
-		// }
+			case .disconnected:
+				self.logger?.error("attempted to write data while disconnected.")
+				context.fireErrorCaught(WSHandlerInternalError())
+				promise?.fail(WSHandlerInternalError())
+				return
+		}
 	}
 }
