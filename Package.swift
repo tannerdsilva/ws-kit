@@ -11,10 +11,10 @@ let package = Package(
 	products: [
 		// Products define the executables and libraries a package produces, making them visible to other packages.
 		.library(
-			name: "web-core",
+			name: "WebCore",
 			targets: ["WebCore"]),
 		.library(
-			name: "ws-client",
+			name: "WebSocket",
 			targets: ["WebSocket"]
 		)
 	],
