@@ -11,8 +11,12 @@ let package = Package(
 	products: [
 		// Products define the executables and libraries a package produces, making them visible to other packages.
 		.library(
-			name: "ws-kit",
+			name: "web-core",
 			targets: ["WebCore"]),
+		.library(
+			name: "ws-client",
+			targets: ["WebSocket"]
+		)
 	],
 	dependencies: [
 		Package.Dependency.package(url:"https://github.com/apple/swift-nio.git", from:"2.58.0"),
