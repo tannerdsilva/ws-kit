@@ -29,7 +29,7 @@ public struct Base64 {
 	/// decode a base64 string to a byte array
 	/// - parameter dataEncoding: the base64 string to decode
 	public static func decode(_ dataEncoding:String) throws -> [UInt8] {
-		let newBytes = malloc(base64_decoded_length(dataEncoding.count))
+		let newBytes = malloc(base64_decoded_length(dataEncoding.count))!
 		defer {
 			free(newBytes)
 		}

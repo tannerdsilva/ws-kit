@@ -61,7 +61,7 @@ extension Client {
 		do {
 			base64Key = try Base64.encode(bytes:requestKey)
 		} catch let error {
-			log.critical("failed to encode request key to base64.", metadata:["error":"\(error.localizedDescription)"])
+			log.critical("failed to encode request key to base64.", metadata:["error":"\(String(describing:error))"])
 			upgradePromise.fail(error)
 			return channel.eventLoop.makeFailedFuture(error)
 		}

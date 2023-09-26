@@ -72,7 +72,7 @@ extension Client {
 				self.logger?.info("channel closed.")
 				switch self.caughtError {
 					case .some(let error):
-						self.logger?.critical("channel closed with error.", metadata:["error":"\(error.localizedDescription)"])
+						self.logger?.critical("channel closed with error.", metadata:["error":"\(String(describing:error))"])
 						self.closureHandler?(.failure(error))
 					case .none:
 						self.logger?.info("channel closed without error.")
@@ -148,7 +148,7 @@ extension Client {
 		}
 
 		public func errorCaught(context:ChannelHandlerContext, error:Swift.Error) {
-			self.logger?.critical("error caught in pipeline", metadata:["error":"\(error.localizedDescription)"])
+			self.logger?.critical("error caught in pipeline", metadata:["error":"\(String(describing:error))"])
 			self.caughtError = error
 			context.close(mode:.all, promise:nil)
 		}

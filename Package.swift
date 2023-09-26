@@ -35,6 +35,7 @@ let package = Package(
 				.product(name:"NIO", package:"swift-nio"),
 				"cweb",
 				.product(name:"RAW", package:"rawdog"),
+				.product(name:"NIOHTTP1", package:"swift-nio"),
 			]
 		),
 		.target(

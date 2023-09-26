@@ -116,12 +116,12 @@ public struct Message {
 		for var buffer in self.buffers {
 			result.writeBuffer(&buffer)
 		}
-		let allBytes = Array(result.readableBytesView)
+		let allBytes = Array<UInt8>(result.readableBytesView)
 		switch self.type {
 			case .text:
 			return Message.Inbound.data(allBytes)
 			case .binary:
-			return Message.Inbound.text(String(bytes:allBytes, encoding:.utf8)!)
+			return Message.Inbound.text(String(cString:allBytes))
 		}
 	}
 }
