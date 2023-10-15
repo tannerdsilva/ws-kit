@@ -76,7 +76,7 @@ internal final class Handler:ChannelDuplexHandler {
 	internal let logger:Logger?
 
 	/// initialize a new handler for use above a websocket channel handler
-	internal init(log:Logger?, surl:URL.Split, maxMessageSize:size_t, maxFrameSize:size_t, healthyConnectionThreshold:TimeAmount) {
+	internal init(log:Logger?, maxMessageSize:size_t, maxFrameSize:size_t, healthyConnectionThreshold:TimeAmount) {
 		self.maxMessageSize = maxMessageSize
 		self.maxFrameSize = maxFrameSize
 		self.healthyConnectionTimeout = healthyConnectionThreshold

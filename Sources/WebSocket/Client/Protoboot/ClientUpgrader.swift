@@ -11,7 +11,7 @@ fileprivate let magicWebSocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 extension WebSocket.Client {
 	/// this is the class that is used to upgrade the HTTP connection to a WebSocket connection.
-	internal final class HTTPToWebSocketUpgrader:NIOHTTPClientProtocolUpgrader {
+	internal final class Upgrader:NIOHTTPClientProtocolUpgrader {
 		fileprivate static let loggerLabel = "ws-client.protoboot.upgrader"
 
 		/// errors that may be throwin into an instance's `upgradePromise

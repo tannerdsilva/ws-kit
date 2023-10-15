@@ -80,7 +80,7 @@ public final actor Client:Sendable, Service {
 	/// - parameter configuration: the configuration for this client.
 	/// - parameter eventLoop: the event loop to use when running this client.
 	/// - parameter logger: the logger to use when logging messages.
-	public init(url:URL, configuration:Client.Configuration, on eventLoop:EventLoop, log:Logger?) throws {
+	public init(url:URL, configuration:Configuration, on eventLoop:EventLoop, log:Logger?) throws {
 		self.url = url
 		self.configuration = configuration
 		self.eventLoop = eventLoop

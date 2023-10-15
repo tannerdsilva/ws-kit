@@ -10,7 +10,7 @@ extension Client {
 	/// - parameter url: the ``URL.Split`` to connect to.
 	/// - parameter configuration: the configuration for this client.
 	/// - parameter eventLoop: the event loop to use when creating the bootstrap.
-	internal static func bootstrap(url:URL.Split, configuration:Client.Configuration, eventLoop:EventLoop) throws -> NIOClientTCPBootstrap {
+	internal static func bootstrap(url:URL.Split, configuration:Configuration, eventLoop:EventLoop) throws -> NIOClientTCPBootstrap {
 		
 		// this is the client bootstrapper
 		let cb = ClientBootstrap(validatingGroup:eventLoop)
@@ -74,12 +74,12 @@ extension Client {
 		var hndlers:[RemovableChannelHandler] = [requestEncoder, ByteToMessageHandler(responseDecoder)]
 
 		// build the websocket handlers that will be added after the protocol upgrade is completed.
-		let webSocketHandler = Handler(log:log, surl:splitURL, maxMessageSize:maxMessageSize, maxFrameSize:maxFrameSize, healthyConnectionThreshold:healthyTimeout)
+		let webSocketHandler = Handler(log:log, maxMessageSize:maxMessageSize, maxFrameSize:maxFrameSize, healthyConnectionThreshold:healthyTimeout)
 		var buildHandlers:[NIOCore.ChannelHandler] = [webSocketHandler];
 		buildHandlers.append(contentsOf:handlers)
 
 		// build the websocket upgrader.
-		let websocketUpgrader = HTTPToWebSocketUpgrader(log:log, surl:splitURL, requestKey:base64Key, maxWebSocketFrameSize:maxFrameSize, upgradePromise:upgradePromise, handlers:buildHandlers)
+		let websocketUpgrader = Upgrader(log:log, surl:splitURL, requestKey:base64Key, maxWebSocketFrameSize:maxFrameSize, upgradePromise:upgradePromise, handlers:buildHandlers)
 		let newupg = NIOHTTPClientUpgradeHandler(upgraders:[websocketUpgrader], httpHandlers:hndlers, upgradeCompletionHandler: { context in
 			timeoutTask.cancel()
 		})
