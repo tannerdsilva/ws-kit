@@ -55,16 +55,43 @@ public final actor Client:Sendable, Service {
 	// using the structure.
 	// - the various continuations that this client will use to send data to the user.
 	/// the continuation that will be used to send text data to the user.
-	public var textContinuation:AsyncStream<String>.Continuation? = nil
+	fileprivate var textContinuation:AsyncStream<String>.Continuation? = nil
+	/// get the current text continuation.
+	public func getTextContinuation() -> AsyncStream<String>.Continuation? {
+		return self.textContinuation
+	}
+	/// set the current text continuation.
+	public func setTextContinuation(_ continuation:AsyncStream<String>.Continuation?) {
+		self.textContinuation = continuation
+	}
+
 	/// the continuation that will be used to send binary data to the user.
-	public var binaryContinuation:AsyncStream<[UInt8]>.Continuation? = nil
+	fileprivate var binaryContinuation:AsyncStream<[UInt8]>.Continuation? = nil
+	/// get the current binary continuation.
+	public func getBinaryContinuation() -> AsyncStream<[UInt8]>.Continuation? {
+		return self.binaryContinuation
+	}
+	/// set the current binary continuation.
+	public func setBinaryContinuation(_ continuation:AsyncStream<[UInt8]>.Continuation?) {
+		self.binaryContinuation = continuation
+	}
+
 	/// the continuation that will be used to send latency data to the user (latency as measured by ping and pong messages)
-	public var latencyContinuation:AsyncStream<MeasuredLatency>.Continuation? = nil
+	fileprivate var latencyContinuation:AsyncStream<MeasuredLatency>.Continuation? = nil
+	/// get the current latency continuation.
+	public func getLatencyContinuation() -> AsyncStream<MeasuredLatency>.Continuation? {
+		return self.latencyContinuation
+	}
+	/// set the current latency continuation.
+	public func setLatencyContinuation(_ continuation:AsyncStream<MeasuredLatency>.Continuation?) {
+		self.latencyContinuation = continuation
+	}
+	
 	/// the continuation that will be used to send connection stage data to the user.
-	public var stateContinuation:AsyncStream<State>.Continuation? = nil
+	fileprivate var stateContinuation:AsyncStream<State>.Continuation? = nil
 
 	/// the current state of this client.
-	public internal(set) var currentState:State = .disconnected {
+	fileprivate var currentState:State = .disconnected {
 		// automatically yield the new stage value to the continuation.
 		didSet {
 			// i chose not to check if the new value is the same as the old value, because i do not want to add the overhead of a comparison to this code.
@@ -80,7 +107,7 @@ public final actor Client:Sendable, Service {
 	/// - parameter configuration: the configuration for this client.
 	/// - parameter eventLoop: the event loop to use when running this client.
 	/// - parameter logger: the logger to use when logging messages.
-	public init(url:URL, configuration:Client.Configuration, on eventLoop:EventLoop, log:Logger?) throws {
+	public init(url:URL, configuration:Configuration, on eventLoop:EventLoop, log:Logger?) throws {
 		self.url = url
 		self.configuration = configuration
 		self.eventLoop = eventLoop
