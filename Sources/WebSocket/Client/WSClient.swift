@@ -8,13 +8,13 @@ import Logging
 import ServiceLifecycle
 
 /// a websocket client.
-public final actor Client:Sendable, Service {
+public final actor Client:Sendable {
 	/// thrown when the client is in an invalid state for the requested operation.
 	public struct InvalidState:Sendable, Swift.Error {}
 	
 	/// represents the various stages the client may be in 
 	public enum State:Sendable, Equatable {
-		
+		case initialized
 		/// the client is currently connecting to the remote peer.
 		case connecting
 		/// the client is connected to the remote peer.
@@ -22,7 +22,7 @@ public final actor Client:Sendable, Service {
 		/// the client is currently disconnecting from the remote peer.
 		case disconnecting
 		/// the client is disconnected from the remote peer.
-		case disconnected
+		case terminated(Result<Void, Swift.Error>)
 
 		/// equality operator implementation.
 		public static func == (lhs:Self, rhs:Self) -> Bool {
@@ -33,7 +33,7 @@ public final actor Client:Sendable, Service {
 					return true
 				case (.disconnecting, .disconnecting):
 					return true
-				case (.disconnected, .disconnected):
+				case (.terminated, .terminated):
 					return true
 				default:
 					return false
@@ -54,6 +54,7 @@ public final actor Client:Sendable, Service {
 	
 	// using the structure.
 	// - the various continuations that this client will use to send data to the user.
+	
 	/// the continuation that will be used to send text data to the user.
 	fileprivate var textContinuation:AsyncStream<String>.Continuation? = nil
 	/// get the current text continuation.
@@ -89,18 +90,33 @@ public final actor Client:Sendable, Service {
 	
 	/// the continuation that will be used to send connection stage data to the user.
 	fileprivate var stateContinuation:AsyncStream<State>.Continuation? = nil
-
+	/// get the current state continuation
+	public func getStateContinuation() -> AsyncStream<State>.Continuation? {
+		return self.stateContinuation
+	}
+	/// set the current latency continuation
+	public func setStateContinuation(_ continuation:AsyncStream<State>.Continuation?) {
+		self.stateContinuation = continuation
+	}
 	/// the current state of this client.
-	fileprivate var currentState:State = .disconnected {
+	fileprivate var disconnectionWaiters:[UnsafeContinuation<Void, Swift.Error>] = []
+	fileprivate var currentState:State = .initialized {
 		// automatically yield the new stage value to the continuation.
 		didSet {
-			// i chose not to check if the new value is the same as the old value, because i do not want to add the overhead of a comparison to this code.
 			if self.stateContinuation != nil {
 				self.logger?.trace("yielding async connection state: \(currentState)")
 				self.stateContinuation!.yield(currentState)
 			}
 		}
 	}
+	fileprivate func disconnectionEvent(result:Result<Void, Swift.Error>) {
+		self.currentState = .terminated(result)
+		for waiter in self.disconnectionWaiters {
+			waiter.resume(with:result)
+		}
+	}
+	
+	/// the work that must be done when the client successfully 
 
 	/// initialize a new client instance.
 	/// - parameter url: the URL to connect to.
@@ -114,14 +130,12 @@ public final actor Client:Sendable, Service {
 		self.logger = log
 	}
 
-	/// runs the client websocket service. includes integrated healthchecking, data handling, graceful shutdown, etc.
-	/// this client will immediately read the continuation variables and start sending data to them.
+	/// establishes a connection to the configured websocket endpoint
 	/// - NOTE: continuations registered after this method is called will not be used.
-	public func run() async throws {
-		
+	public func connect() async throws {
 		// verify the state
 		switch self.currentState {
-			case .disconnected:
+			case .initialized:
 				break
 			default:
 				throw InvalidState()
@@ -139,15 +153,17 @@ public final actor Client:Sendable, Service {
 		// now at stage connecting
 		self.currentState = .connecting
 
-		defer {
-			// when this function exits, the connection is disconnected. always.
-			self.currentState = .disconnected
-		}
-
 		// first, we much connect to the remote peer.
-		let (c, connectedClient) = try await Client.protoboot(log:useLogger, url:url, headers:[:], configuration:configuration, on:eventLoop, handlerBuilder: { logger, pipeline in
+		let (c, _) = try await Client.protoboot(log:useLogger, url:url, headers:[:], configuration:configuration, on:eventLoop, handlerBuilder: { logger, pipeline in
 			// this is where we need to build the data pipeline for this network connection. the base interface here is the Message type.
 			let makeCapper = Capper(log:logger)
+			
+			makeCapper.registerClosureHandler({ closureResult in
+				Task.detached {
+					await self.disconnectionEvent(result:closureResult)
+				}
+			})
+
 			if self.textContinuation != nil {
 				makeCapper.registerTextStreamContinuation(self.textContinuation!)
 			}
@@ -160,15 +176,21 @@ public final actor Client:Sendable, Service {
 			pipeline.append(makeCapper)
 			return makeCapper
 		})
-
-		self.logger?.trace("successfully connected to remote peer")
-
 		self.currentState = .connected(c)
-		try await withUnsafeThrowingContinuation({ (connectionResult:UnsafeContinuation<Void, Swift.Error>) in
-			connectedClient.registerClosureHandler({ result in
-				connectionResult.resume(with: result)
-			})
-		})
+		self.logger?.trace("successfully connected to remote peer")
+	}
+	
+	public func waitForClosure() async throws {
+		switch self.currentState {
+			case .connected:
+				try await withUnsafeThrowingContinuation({ (continuation:UnsafeContinuation<Void, Swift.Error>) in
+					self.disconnectionWaiters.append(continuation)
+				})
+			case .terminated(let result):
+				try result.get()
+			default:
+				throw InvalidState()
+		}
 	}
 
 	public func initiateSafeClosure() async throws {
@@ -197,5 +219,12 @@ public final actor Client:Sendable, Service {
 			throw InvalidState()
 		}
 		try await channel.writeAndFlush(Message.Outbound.text(text)).get()
+	}
+}
+
+extension Client:Service {
+	public func run() async throws {
+		try await self.connect()
+		try await self.waitForClosure()
 	}
 }
