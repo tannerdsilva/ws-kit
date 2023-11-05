@@ -1,5 +1,4 @@
 import cweb
-import RAW
 
 public struct Base64 {
 	/// error thrown by Base64 encoding/decoding functions
@@ -19,10 +18,12 @@ public struct Base64 {
 		defer {
 			free(newBytes)
 		}
-		let encodedLength = bytes.asRAW_val({ rv in
-			base64_encode(newBytes, enclen, rv.mv_data, bytes.count)
+		let encodedLength = bytes.exposeBytes({ mv_data, mv_size in
+			base64_encode(newBytes, enclen, mv_data, mv_size)
 		})
-		assert(encodedLength >= 0)
+		guard encodedLength >= 0 else {
+			throw Error.encodingError(bytes, geterrno())
+		}
 		return String(cString:newBytes!.assumingMemoryBound(to:Int8.self))
 	}
 	
@@ -35,11 +36,30 @@ public struct Base64 {
 		}
 		let decodeResult = base64_decode(newBytes, base64_decoded_length(dataEncoding.count), dataEncoding, dataEncoding.count)
 		guard decodeResult >= 0 else {
-			fatalError("could not decode base64 string")
+			throw Error.decodingError(dataEncoding, geterrno())
 		}
 		return Array(unsafeUninitializedCapacity:decodeResult, initializingWith: { (buffer, count) in
 			memcpy(buffer.baseAddress!, newBytes, decodeResult)
 			count = decodeResult
 		})
+	}
+}
+
+fileprivate extension Array where Element == UInt8 {
+	func exposeBytes<R>(_ valFunc:(UnsafeRawPointer?, size_t) throws -> R) rethrows -> R {
+		if let hasContiguousBytes = try self.withContiguousStorageIfAvailable({ (bytes) -> R in
+			return try valFunc(bytes.baseAddress!, bytes.count)
+		}) {
+			return hasContiguousBytes
+		} else {
+			let newBuffer = UnsafeMutableBufferPointer<UInt8>.allocate(capacity:self.count)
+			defer {
+				newBuffer.deallocate()
+			}
+			for (index, element) in self.enumerated() {
+				newBuffer[index] = element
+			}
+			return try valFunc(newBuffer.baseAddress!, self.count)
+		}
 	}
 }

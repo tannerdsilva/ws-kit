@@ -13,16 +13,23 @@ final class WebSocketClientTests:XCTestCase {
 		var newLogger = Logger(label:"test")
 		newLogger.logLevel = .trace
 		let newURL = URL("wss://relay.damus.io")
-		let newClient = try WebSocket.Client(url:newURL, configuration:WebSocket.Client.Configuration(), on:newEventLoop, log:newLogger)
-		try await withThrowingTaskGroup(of:Void.self) { group in
-			group.addTask {
-				try await newClient.run()
+		
+		var caughtError:Swift.Error? = nil
+		do {
+			let newClient = try WebSocket.Client(url:newURL, configuration:WebSocket.Configuration(), on:newEventLoop, log:newLogger)
+			try await withThrowingTaskGroup(of:Void.self) { group in
+				group.addTask {
+					try await newClient.run()
+				}
+				group.addTask {
+					await Task.sleep(5 * 1000 * 1000 * 1000)
+					try await newClient.initiateSafeClosure()
+				}
+				try await group.waitForAll()
 			}
-			group.addTask {
-				await Task.sleep(5 * 1000 * 1000 * 1000)
-				try await newClient.initiateSafeClosure()
-			}
-			try await group.waitForAll()
+		} catch let error {
+			caughtError = error
 		}
+		XCTAssertNil(caughtError)
 	}
 }
