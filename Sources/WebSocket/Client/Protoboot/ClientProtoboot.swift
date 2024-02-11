@@ -3,6 +3,7 @@ import NIOSSL
 import NIOHTTP1
 import WebCore
 import Logging
+import RAW_base64
 
 extension Client {
 
@@ -48,23 +49,16 @@ extension Client {
 	/// - parameter maxMessageSize: the maximum size of a websocket message in bytes.
 	/// - parameter maxFrameSize: the maximum size of a websocket frame in bytes.
 	/// - returns: a future that will be fulfilled when the websocket upgrade infrastructure is fully configured and ready to go.
-	internal static func setupChannel(log:Logger, splitURL:URL.Split, handlers:[NIOCore.ChannelHandler], headers:HTTPHeaders, channel:Channel, upgradePromise:EventLoopPromise<Void>, on eventLoop:EventLoop, wsUpgradeTimeout:TimeAmount, healthyTimeout:TimeAmount, maxMessageSize:size_t, maxFrameSize:size_t) -> EventLoopFuture<Void> {
+	internal static func setupChannel(log:Logger?, splitURL:URL.Split, handlers:[NIOCore.ChannelHandler], headers:HTTPHeaders, channel:Channel, upgradePromise:EventLoopPromise<Void>, on eventLoop:EventLoop, wsUpgradeTimeout:TimeAmount, healthyTimeout:TimeAmount, maxMessageSize:size_t, maxFrameSize:size_t) -> EventLoopFuture<Void> {
 		// light up the timeout task.
 		let timeoutTask = channel.eventLoop.scheduleTask(in:wsUpgradeTimeout) {
 			// the timeout task fired. fail the upgrade promise.
 			upgradePromise.fail(Error.connectionTimeout)
 		}
 
-		// create a random key for the upgrade request
+		// create a random key for the upgrade request. base64 encode the random bytes.
 		let requestKey = (0..<16).map { _ in UInt8.random(in: .min ..< .max) }
-		let base64Key:String
-		do {
-			base64Key = try Base64.encode(bytes:requestKey)
-		} catch let error {
-			log.critical("failed to encode request key to base64.", metadata:["error":"\(String(describing:error))"])
-			upgradePromise.fail(error)
-			return channel.eventLoop.makeFailedFuture(error)
-		}
+		let base64Key:String = String(RAW_base64.encode(requestKey))
 
 		// bootstrap http handlers from scratch.
 		let requestEncoder = HTTPRequestEncoder()
@@ -93,10 +87,10 @@ extension Client {
 	}
 
 	/// bootstrap the protocol pipeline as a websocket client. connects to the specified URL with the specified configuration, and then allows the caller to build an additional pipeline and claim the return type.
-	public static func protoboot<R>(log logIn:Logger, url:URL, headers:HTTPHeaders, configuration:Configuration, on eventLoop:EventLoop, handlerBuilder buildHandlersFunc:@escaping((Logger, inout [NIOCore.ChannelHandler]) -> R)) async throws -> (Channel, R) {
+	public static func protoboot<R>(log logIn:Logger?, url:URL, headers:HTTPHeaders, configuration:Configuration, on eventLoop:EventLoop, handlerBuilder buildHandlersFunc:@escaping((Logger?, inout [NIOCore.ChannelHandler]) -> R)) async throws -> (Channel, R) {
 		// mutate the logger and burn a new metadata item to it.
 		var modLogger = logIn
-		modLogger[metadataKey:"url"] = "\(url)"
+		modLogger?[metadataKey:"url"] = "\(url)"
 		let log = modLogger
 
 		// parse the url.
@@ -109,13 +103,13 @@ extension Client {
 		let upgradePromise = eventLoop.makePromise(of:Void.self)
 		upgradePromise.futureResult.cascadeFailure(to:returnTypePromise)
 		
-		// build the bootstrap
+		// build the bootstrap.
 		let bootstrap = try Self.bootstrap(url:splitURL, configuration:configuration, eventLoop:eventLoop)
 			.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 			.channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value:1)
 			.channelInitializer({ channel in
 
-				modLogger.debug("beginning channel pipeline initialization", metadata:["ctx":"protoboot"])
+				modLogger?.debug("beginning channel pipeline initialization", metadata:["ctx":"protoboot"])
 
 				// allow the caller to build their pipeline and claim the return type.
 				var buildPipeline = [NIOCore.ChannelHandler]()
@@ -123,7 +117,7 @@ extension Client {
 
 				// briefly augment the upgrade promise with the return promise that will contain the elements that the user wants.
 				upgradePromise.futureResult.whenSuccess({ [ml = modLogger, rInstPass = retResult] in
-					ml.debug("websocket upgrade complete. yielding return type from pipeline initializer.", metadata:["ctx":"protoboot"])
+					ml?.debug("websocket upgrade complete. yielding return type from pipeline initializer", metadata:["ctx":"protoboot"])
 					returnTypePromise.succeed(rInstPass)
 				})
 
@@ -133,9 +127,9 @@ extension Client {
 			.connectTimeout(configuration.timeouts.tcpConnectionTimeout)
 
 		// connect.
-		log.trace("attempting to establish tcp connection...", metadata:["ctx":"protoboot"])
+		log?.trace("attempting to establish tcp connection...", metadata:["ctx":"protoboot"])
 		let connectionFuture = try await bootstrap.connect(host:splitURL.host, port:Int(splitURL.port)).get()
-		log.debug("tcp connection established.")
+		log?.debug("tcp connection established")
 
 		// launch the async task to acquire the return type. this should be completed when the websocket upgrade is complete.
 		return (connectionFuture, try await withTaskCancellationHandler(operation: {
@@ -148,7 +142,7 @@ extension Client {
 							myContinuation.resume(throwing:error)
 					}
 				})
-				log.trace("successfully synchronized swift continuation with return type promise.", metadata:["ctx":"protoboot"])
+				log?.trace("successfully synchronized swift continuation with return type promise", metadata:["ctx":"protoboot"])
 			})
 		}, onCancel: {
 			// the task was cancelled. fail the upgrade promise.

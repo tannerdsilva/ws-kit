@@ -66,33 +66,36 @@ extension Client {
 		
 		/// called when the handler is added to the pipeline.
 		internal func handlerAdded(context:ChannelHandlerContext) {
-			self.logger?.trace("handler added.")
+			self.logger?.trace("handler added")
 			self.eventLoop = context.eventLoop
+			
 			context.channel.closeFuture.whenComplete { _ in
-				self.logger?.info("channel closed.")
+				self.logger?.info("channel closed")
 				switch self.caughtError {
 					case .some(let error):
-						self.logger?.critical("channel closed with error.", metadata:["error":"\(String(describing:error))"])
+						self.logger?.error("channel closed with error", metadata:["error":"\(String(describing:error))"])
 						self.closureHandler?(.failure(error))
 					case .none:
-						self.logger?.info("channel closed without error.")
+						self.logger?.info("channel closed without error")
 						self.closureHandler?(.success(()))
 				}
 			}
 		}
-
+		
+		/// called when the handler is removed from the pipeline.
 		internal func handlerRemoved(context:ChannelHandlerContext) {
-			self.logger?.trace("handler removed.")
+			self.logger?.trace("handler removed")
+			// handle each of the three async
 			if textStream != nil {
-				self.logger?.trace("finishing registered text stream.")
+				self.logger?.trace("finishing registered text stream")
 				textStream!.finish()
 			}
 			if binaryStream != nil {
-				self.logger?.trace("finishing registered binary stream.")
+				self.logger?.trace("finishing registered binary stream")
 				binaryStream!.finish()
 			}
 			if latencyStream != nil {
-				self.logger?.trace("finishing registered latency stream.")
+				self.logger?.trace("finishing registered latency stream")
 				latencyStream!.finish()
 			}
 			textStream = nil
@@ -104,7 +107,7 @@ extension Client {
 			let frame = self.unwrapInboundIn(data)
 			switch frame {
 				case .text(let text):
-					self.logger?.debug("got text message: \(text.count) bytes")
+					self.logger?.debug("got text message", metadata:["byte_count":"\(text.count)"])
 					if textStream != nil {
 						self.logger?.trace("yielding text message to registered stream")
 						self.textStream!.yield(text)
@@ -112,7 +115,7 @@ extension Client {
 						self.logger?.warning("no registered text stream, dropping message")
 					}
 				case .data(let data):
-					self.logger?.debug("got binary message: \(data.count) bytes")
+					self.logger?.debug("got binary message", metadata:["byte_count":"\(data.count)"])
 					if binaryStream != nil {
 						self.logger?.trace("yielding binary message to registered stream")
 						self.binaryStream!.yield(data)
@@ -120,10 +123,10 @@ extension Client {
 						self.logger?.warning("no registered binary stream, dropping message")
 					}
 				case .unsolicitedPong(let sig):
-					self.logger?.info("got unsolicited pong from system", metadata:["signature":"\(sig)"])
+					self.logger?.debug("got unsolicited pong from system", metadata:["signature":"\(sig)"])
 					break;
 				case .solicitedPong(let responseTime, let sig):
-					self.logger?.info("measured \(responseTime)s latency to remote peer.", metadata:["signature":"\(sig)", "latency_type":"their_pong_rx"])
+					self.logger?.debug("measured \(responseTime)s latency to remote peer", metadata:["signature":"\(sig)", "latency_type":"their_pong_rx"])
 					if latencyStream != nil {
 						self.logger?.trace("yielding latency measurement to registered stream")
 						self.latencyStream!.yield(MeasuredLatency.remoteResponseTime(responseTime))
@@ -131,9 +134,9 @@ extension Client {
 						self.logger?.trace("no registered latency stream, dropping measurement")
 					}
 				case .ping(let future):
-					self.logger?.debug("got ping from remote peer.")
+					self.logger?.debug("got ping from remote peer")
 					future.whenSuccess { responseTime in
-						self.logger?.info("measured \(responseTime)s latency to remote peer.", metadata:["latency_type":"our_pong_tx"])
+						self.logger?.info("measured \(responseTime)s latency to remote peer", metadata:["latency_type":"our_pong_tx"])
 						if self.latencyStream != nil {
 							self.logger?.trace("yielding latency measurement to registered stream")
 							self.latencyStream!.yield(MeasuredLatency.ourWriteTime(responseTime))
@@ -142,7 +145,7 @@ extension Client {
 						}
 					}
 				case .gracefulDisconnect(_, _, let future):
-					self.logger?.notice("got graceful disconnect from remote peer. initiating close.")
+					self.logger?.notice("got graceful disconnect from remote peer. initiating close")
 					future.completeWith(.success(()));
 			}
 		}

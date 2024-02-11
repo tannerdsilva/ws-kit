@@ -142,13 +142,7 @@ public final actor Client:Sendable {
 		}
 
 		// build the logger for this client.
-		let useLogger:Logger
-		switch self.logger {
-			case .some(let logger):
-				useLogger = logger
-			case .none:
-				useLogger = Logger(label:"ws-client")
-		}
+		let useLogger:Logger? = self.logger
 
 		// now at stage connecting
 		self.currentState = .connecting

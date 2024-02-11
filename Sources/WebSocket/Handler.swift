@@ -568,7 +568,7 @@ internal final class Handler:ChannelDuplexHandler {
 							// make the promise that will be fulfilled when the peers downstream are ready for the closure handshake to complete.
 							let responsePromise = context.eventLoop.makePromise(of:Void.self)
 							responsePromise.futureResult.whenComplete { _ in
-								self.logger?.trace("...downstream peers are ready for the connection to close. sending corresponding close frame.")
+								self.logger?.trace("...downstream peers are ready for the connection to close. sending corresponding close frame")
 								
 								// build the response frame that will be sent later.
 								let maskingFrame = WebSocketMaskingKey.random()
@@ -579,10 +579,10 @@ internal final class Handler:ChannelDuplexHandler {
 								context.writeAndFlush(outboundOut).whenComplete { writeRes in
 									switch writeRes {
 										case .success:
-											self.logger?.trace("sent close frame.")
+											self.logger?.trace("sent close frame")
 											context.close(promise:nil)
 										case .failure(let error):
-											self.logger?.error("failed to send close frame: '\(error)'")
+											self.logger?.error("failed to send close frame.", metadata:["error":"\(String(describing:error))"])
 											context.close(promise:nil)
 									}
 								}

@@ -1,7 +1,6 @@
 #ifndef CWEB
 #define CWEB
 
-#include "base64.h"
 #include "time.h"
 #include <string.h>
 #include <stdlib.h>

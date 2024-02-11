@@ -23,6 +23,7 @@ let package = Package(
 		Package.Dependency.package(url:"https://github.com/apple/swift-nio-ssl.git", from:"2.25.0"),
 		Package.Dependency.package(url:"https://github.com/apple/swift-log.git", from:"1.0.0"),
 		Package.Dependency.package(url:"https://github.com/swift-server/swift-service-lifecycle.git", from:"2.0.0"),
+		Package.Dependency.package(url:"https://github.com/tannerdsilva/rawdog.git", from:"6.2.10")
 	],
 	targets: [
 		.target(name:"cweb"),
@@ -44,6 +45,7 @@ let package = Package(
 				.product(name:"NIOWebSocket", package:"swift-nio"),
 				.product(name:"Logging", package:"swift-log"),
 				.product(name:"ServiceLifecycle", package:"swift-service-lifecycle"),
+				.product(name:"RAW_base64", package:"rawdog")
 			]
 		),
 		.testTarget(

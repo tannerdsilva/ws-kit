@@ -7,6 +7,8 @@ import NIOWebSocket
 import WebCore
 import Logging
 
+import RAW_base64
+
 fileprivate let magicWebSocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 extension WebSocket.Client {
@@ -120,14 +122,7 @@ extension WebSocket.Client {
 			var hasher = SHA1()
 			hasher.update(string: self.requestKey)
 			hasher.update(string: magicWebSocketGUID)
-			let expectedAcceptValue:String
-			do {
-				expectedAcceptValue = try Base64.encode(bytes:hasher.finish())
-			} catch {
-				self.logger?.critical("failed to upgrade protocol from https to wws. failed to encode SHA1 hash of request key: \(error)")
-				self.upgradePromise.fail(error)
-				return false
-			}
+			let expectedAcceptValue:String = String(RAW_base64.encode(hasher.finish()))
 
 			guard acceptValueHeader[0] == expectedAcceptValue else {
 				self.logger?.error("failed to upgrade protocol from https to wss. invalid Sec-WebSocket-Accept header value found in remote peer response: '\(acceptValueHeader[0])'")
