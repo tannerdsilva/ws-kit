@@ -147,7 +147,7 @@ sha1_step(struct sha1_ctxt *ctxt)
 /*------------------------------------------------------------*/
 
 void
-c_nio_sha1_init(struct sha1_ctxt *ctxt)
+wskit_sha1_init(struct sha1_ctxt *ctxt)
 {
 	bzero(ctxt, sizeof(struct sha1_ctxt));
 	H(0) = 0x67452301;
@@ -158,7 +158,7 @@ c_nio_sha1_init(struct sha1_ctxt *ctxt)
 }
 
 void
-c_nio_sha1_pad(struct sha1_ctxt *ctxt)
+wskit_sha1_pad(struct sha1_ctxt *ctxt)
 {
 	size_t padlen;		/*pad length in bytes*/
 	size_t padstart;
@@ -192,7 +192,7 @@ c_nio_sha1_pad(struct sha1_ctxt *ctxt)
 }
 
 void
-c_nio_sha1_loop(struct sha1_ctxt *ctxt, const uint8_t *input, size_t len)
+wskit_sha1_loop(struct sha1_ctxt *ctxt, const uint8_t *input, size_t len)
 {
 	size_t gaplen;
 	size_t gapstart;
@@ -217,12 +217,12 @@ c_nio_sha1_loop(struct sha1_ctxt *ctxt, const uint8_t *input, size_t len)
 }
 
 void
-c_nio_sha1_result(struct sha1_ctxt *ctxt, char digest0[static SHA1_RESULTLEN])
+wskit_sha1_result(struct sha1_ctxt *ctxt, char digest0[static SHA1_RESULTLEN])
 {
 	uint8_t *digest;
 
 	digest = (uint8_t *)digest0;
-	c_nio_sha1_pad(ctxt);
+	wskit_sha1_pad(ctxt);
 #if BYTE_ORDER == BIG_ENDIAN
 	bcopy(&ctxt->h.b8[0], digest, SHA1_RESULTLEN);
 #else

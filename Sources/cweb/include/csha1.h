@@ -35,10 +35,10 @@ typedef struct sha1_ctxt SHA1_CTX;
 #define __min_size(x)	static (x)
 #endif
 
-extern void c_nio_sha1_init(struct sha1_ctxt *);
-extern void c_nio_sha1_pad(struct sha1_ctxt *);
-extern void c_nio_sha1_loop(struct sha1_ctxt *, const uint8_t *, size_t);
-extern void c_nio_sha1_result(struct sha1_ctxt *, char[__min_size(SHA1_RESULTLEN)]);
+extern void wskit_sha1_init(struct sha1_ctxt *);
+extern void wskit_sha1_pad(struct sha1_ctxt *);
+extern void wskit_sha1_loop(struct sha1_ctxt *, const uint8_t *, size_t);
+extern void wskit_sha1_result(struct sha1_ctxt *, char[__min_size(SHA1_RESULTLEN)]);
 
 /* compatibilty with other SHA1 source codes */
 #define SHA1Init(x)		c_nio_sha1_init((x))

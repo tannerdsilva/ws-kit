@@ -11,7 +11,7 @@ public struct SHA1 {
 	// initialize a new sha1 hashing context
 	public init() {
 		self.sha1Ctx = SHA1_CTX()
-		c_nio_sha1_init(&self.sha1Ctx)
+		wskit_sha1_init(&self.sha1Ctx)
 	}
 
 	/// feed the given string into the hash context as a sequence of UTF-8 bytes
@@ -30,7 +30,7 @@ public struct SHA1 {
 
 	/// update the hash context with the given bytes
 	public mutating func update(_ bytes:UnsafeBufferPointer<UInt8>) {
-		c_nio_sha1_loop(&self.sha1Ctx, bytes.baseAddress!, bytes.count)
+		wskit_sha1_loop(&self.sha1Ctx, bytes.baseAddress!, bytes.count)
 	}
 
 	/// export the hashing.
@@ -39,7 +39,7 @@ public struct SHA1 {
 		var hashResult: [UInt8] = Array(repeating: 0, count: 20)
 		hashResult.withUnsafeMutableBufferPointer {
 			$0.baseAddress!.withMemoryRebound(to: Int8.self, capacity: 20) {
-				c_nio_sha1_result(&self.sha1Ctx, $0)
+				wskit_sha1_result(&self.sha1Ctx, $0)
 			}
 		}
 		return hashResult
