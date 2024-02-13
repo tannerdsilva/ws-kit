@@ -1,6 +1,6 @@
 // (c) tanner silva 2023. all rights reserved.
 
-import CNIOSHA1
+import cweb
 
 /// SHA1 hashing implementation. 
 /// this is needed because we must implement a custom HTTP to websocket upgrader for SwiftNIO, and doing this requires some logic that needs SHA1 hashing.
