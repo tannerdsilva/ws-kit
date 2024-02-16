@@ -43,10 +43,14 @@ typedef _cwskit_datachainpair_t*_Nonnull _cwskit_datachainpair_ptr_t;
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 // MARK: init and deinit.
 =======
 // MARK: init and deinit
 >>>>>>> ac2c8be (modified client to close all continuations when the connection closes)
+=======
+// MARK: init and deinit.
+>>>>>>> f0270a5 (moving towards v1)
 
 /// initializes a new datachainpair.
 /// returns: new datachainpair structure to use.
@@ -60,10 +64,14 @@ void _cwskit_dc_close(const _cwskit_datachainpair_ptr_t chain);
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 // MARK: passing data in.
 =======
 // MARK: passing data in
 >>>>>>> ac2c8be (modified client to close all continuations when the connection closes)
+=======
+// MARK: passing data in.
+>>>>>>> f0270a5 (moving towards v1)
 
 /// passes a pointer to be stored into the data chain.
 void _cwskit_dc_pass(const _cwskit_datachainpair_ptr_t chain, const _cwskit_ptr_t ptr);
