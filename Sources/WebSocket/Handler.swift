@@ -280,7 +280,7 @@ internal final class Handler:ChannelDuplexHandler {
 		switch stage {
 			// this is the only valid path forward
 			case .awaitingConnection:
-				self.logger?.info("connected. (handler added).")
+				self.logger?.info("connected.")
 				self.stage = .connected(.idle)
 				self.waitingOnPong = nil
 				self._initiateAutoPing(context:context, interval:self.healthyConnectionTimeout)
@@ -335,6 +335,11 @@ internal final class Handler:ChannelDuplexHandler {
 
 			case .disconnected:
 				self.logger?.trace("handler removed.")
+				self.autoPingTask?.cancel()
+				self.autoPingTask = nil
+				self.waitingOnPong = nil
+				self.pingDates = [:]
+				self.pongPromises = [:]
 		}
 	}
 

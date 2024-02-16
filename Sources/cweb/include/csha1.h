@@ -41,9 +41,9 @@ extern void wskit_sha1_loop(struct sha1_ctxt *, const uint8_t *, size_t);
 extern void wskit_sha1_result(struct sha1_ctxt *, char[__min_size(SHA1_RESULTLEN)]);
 
 /* compatibilty with other SHA1 source codes */
-#define SHA1Init(x)		c_nio_sha1_init((x))
-#define SHA1Update(x, y, z)	c_nio_sha1_loop((x), (y), (z))
-#define SHA1Final(x, y)		c_nio_sha1_result((y), (x))
+#define SHA1Init(x)		wskit_sha1_init((x))
+#define SHA1Update(x, y, z)	wskit_sha1_loop((x), (y), (z))
+#define SHA1Final(x, y)		wskit_sha1_result((y), (x))
 
 #ifdef __cplusplus
 } /* extern "C" */

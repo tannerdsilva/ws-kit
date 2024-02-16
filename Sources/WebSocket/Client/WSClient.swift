@@ -110,9 +110,24 @@ public final actor Client:Sendable {
 		}
 	}
 	fileprivate func disconnectionEvent(result:Result<Void, Swift.Error>) {
+		// set the state as appropriate
 		self.currentState = .terminated(result)
+		// release each of the disconnection waiters
 		for waiter in self.disconnectionWaiters {
 			waiter.resume(with:result)
+		}
+		// any continuations if they exist
+		if self.stateContinuation != nil {
+			self.stateContinuation!.finish()
+		}
+		if self.latencyContinuation != nil {
+			self.latencyContinuation!.finish()
+		}
+		if self.binaryContinuation != nil {
+			self.binaryContinuation!.finish()
+		}
+		if self.textContinuation != nil {
+			self.textContinuation!.finish()
 		}
 	}
 	
@@ -141,13 +156,13 @@ public final actor Client:Sendable {
 				throw InvalidState()
 		}
 
-		// build the logger for this client.
+		// build the logger for this client
 		let useLogger:Logger? = self.logger
 
 		// now at stage connecting
 		self.currentState = .connecting
 
-		// first, we much connect to the remote peer.
+		// first, we much connect to the remote peer
 		let (c, _) = try await Client.protoboot(log:useLogger, url:url, headers:[:], configuration:configuration, on:eventLoop, handlerBuilder: { logger, pipeline in
 			// this is where we need to build the data pipeline for this network connection. the base interface here is the Message type.
 			let makeCapper = Capper(log:logger)

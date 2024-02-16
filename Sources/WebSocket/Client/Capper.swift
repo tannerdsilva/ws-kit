@@ -7,9 +7,13 @@ extension Client {
 	/// this "capper" effectively "caps" data and events from the NIO pipeline and sends them to the frontend using native Swift async streams.
 	internal final class Capper:ChannelInboundHandler {
 
+		/// used to convey the current connection state of the channel the ``Capper`` is connected to.
 		private enum ConnectionStage {
+			/// the channel is not connected
 			case notConnected
+			/// the channel is connected
 			case connected
+			/// the channel closed with the following result
 			case closed(Result<Void, Swift.Error>)
 		}
 
@@ -35,7 +39,7 @@ extension Client {
 		internal init(log:Logger?) {
 			var modLogger = log
 			if log != nil {
-				modLogger![metadataKey:"ctx"] = "capper"
+				modLogger![metadataKey:"type"] = "Client.Capper"
 			}
 			self.logger = modLogger
 		}

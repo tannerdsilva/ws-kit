@@ -3,6 +3,6 @@
 #include <stdio.h>
 #include <errno.h>
 
-int geterrno() {
+int _cwskit_geterrno() {
 	return errno;
 }
