@@ -1,4 +1,4 @@
-#include "datachain.h"
+#include "cwskit_datachain.h"
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdlib.h>

@@ -23,7 +23,14 @@ let package = Package(
 		Package.Dependency.package(url:"https://github.com/swift-server/swift-service-lifecycle.git", from:"2.0.0")
 	],
 	targets: [
-		.target(name:"cweb"),
+		.target(
+			name:"cweb",
+			exclude:[],
+			publicHeadersPath:".",
+			cSettings:[],
+			cxxSettings:[],
+			linkerSettings:[]
+		),
 		.target(
 			name: "WebCore",
 			dependencies: [
@@ -32,7 +39,12 @@ let package = Package(
 				.product(name:"NIOHTTP1", package:"swift-nio"),
 			]
 		),
-		.target(name:"Base64", dependencies:["cweb"]),
+		.target(
+			name:"Base64",
+			dependencies:[
+				"cweb"
+			]
+		),
 		.target(
 			name:"WebSocket",
 			dependencies: [

@@ -1,7 +1,7 @@
 // (c) tanner silva 2024. all rights reserved.
 // material for this file was sourced from the apple/swift-nio project.
 
-#include "include/csha1.h"
+#include "cwskit_csha1.h"
 #include <string.h>
 #if !defined(bzero)
 #define bzero(b,l) memset((b), '\0', (l))

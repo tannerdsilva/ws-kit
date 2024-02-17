@@ -1,7 +1,7 @@
 #ifndef _WSKIT_DATACHAIN_H
 #define _WSKIT_DATACHAIN_H
 
-#include "types.h"
+#include "cwskit_types.h"
 #include <sys/types.h>
 
 /// datachain link structure. this is a forward declaration. think of this as a single link in a chain of events.
