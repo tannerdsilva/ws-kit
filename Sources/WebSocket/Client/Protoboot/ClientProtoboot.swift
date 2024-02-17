@@ -3,7 +3,7 @@ import NIOSSL
 import NIOHTTP1
 import WebCore
 import Logging
-import RAW_base64
+import Base64
 
 extension Client {
 
@@ -58,7 +58,7 @@ extension Client {
 
 		// create a random key for the upgrade request. base64 encode the random bytes.
 		let requestKey = (0..<16).map { _ in UInt8.random(in: .min ..< .max) }
-		let base64Key:String = String(RAW_base64.encode(requestKey))
+		let base64Key:String = String(Base64.encode(requestKey))
 
 		// bootstrap http handlers from scratch.
 		let requestEncoder = HTTPRequestEncoder()

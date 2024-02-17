@@ -1,6 +1,8 @@
 #include "datachain.h"
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 
 _cwskit_datachainpair_t _cwskit_dc_init(const _cwskit_datachainlink_ptr_dealloc_f deallocator_f) {
 	_cwskit_datachainpair_t newpair = {

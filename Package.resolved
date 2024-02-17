@@ -1,15 +1,6 @@
 {
   "pins" : [
     {
-      "identity" : "rawdog",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/tannerdsilva/rawdog.git",
-      "state" : {
-        "revision" : "11230b716afbfe4463ee00da6cddc4faae3618d5",
-        "version" : "6.2.10"
-      }
-    },
-    {
       "identity" : "swift-atomics",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-atomics.git",
@@ -61,15 +52,6 @@
       "state" : {
         "revision" : "b69c630d588c233680f69e1f9f444143692a14c4",
         "version" : "2.0.0"
-      }
-    },
-    {
-      "identity" : "swift-syntax",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-syntax.git",
-      "state" : {
-        "revision" : "64889f0c732f210a935a0ad7cda38f77f876262d",
-        "version" : "509.1.1"
       }
     }
   ],
