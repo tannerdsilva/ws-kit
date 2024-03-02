@@ -1,5 +1,6 @@
 #ifndef CWSKIT_TYPES
 #define CWSKIT_TYPES
+#include <stdint.h>
 
 /// optional pointer type.
 typedef void*_Nullable _cwskit_optr_t;
