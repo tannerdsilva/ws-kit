@@ -59,4 +59,8 @@ void _cwskit_dc_close(const _cwskit_datachainpair_ptr_t chain);
 /// passes a pointer to be stored into the data chain.
 void _cwskit_dc_pass(const _cwskit_datachainpair_ptr_t chain, const _cwskit_ptr_t ptr);
 
+
+typedef void(^_Nonnull _cwskit_datachainlink_ptr_consume_f)(_cwskit_ptr_t);
+void _cwskit_dc_consume_next(const _cwskit_datachainlink_ptr_t preloaded_atomic_base, const _cwskit_datachainpair_ptr_t chain, const _cwskit_datachainlink_ptr_dealloc_f deallocator_f);
+
 #endif // _WSKIT_DATACHAIN_H

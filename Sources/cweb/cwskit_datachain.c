@@ -41,6 +41,7 @@ void _cwskit_dc_close(const _cwskit_datachainpair_ptr_t chain) {
 // internal function that attempts to install a link in the chain.
 // - returns: true if the install was successful and the element count could be incremented. false if the install was not successful.
 bool _cwskit_dc_pass_link(const _cwskit_datachainpair_ptr_t chain, const _cwskit_datachainlink_ptr_t link) {
+	// defines the value that we expect to find on the element we will append to...
 	_cwskit_datachainlink_ptr_t expected = NULL;
 	// load the current tail entry. it may exist, or it may not.
 	_cwskit_datachainlink_ptr_t gettail = atomic_load_explicit(chain->tail, memory_order_acquire);
@@ -56,7 +57,6 @@ bool _cwskit_dc_pass_link(const _cwskit_datachainpair_ptr_t chain, const _cwskit
 	// attempt to write the new entry to the chain.
 	bool storeResult = atomic_compare_exchange_strong_explicit(writeptr, &expected, link, memory_order_release, memory_order_acquire);
 	if (storeResult == true) {
-
 		// update the base and tail pointers based on how the store was applied.
 		if (gettail == NULL) {
 			atomic_store_explicit(chain->base, link, memory_order_release);
@@ -66,12 +66,11 @@ bool _cwskit_dc_pass_link(const _cwskit_datachainpair_ptr_t chain, const _cwskit
 
 		// increment the atomic count to reflect the new entry.
 		atomic_fetch_add_explicit(&chain->element_count, 1, memory_order_acq_rel);
-
 	}
-
 	return storeResult;
 }
 
+/// user function that allows a user to pass a pointer to into the chain for processing.
 void _cwskit_dc_pass(const _cwskit_datachainpair_ptr_t chain, const _cwskit_ptr_t ptr) {
 	const struct _cwskit_datachainlink link_on_stack = {
 		.ptr = ptr,
@@ -85,7 +84,6 @@ void _cwskit_dc_pass(const _cwskit_datachainpair_ptr_t chain, const _cwskit_ptr_
 }
 
 /// internal function that flushes a single writerchain entry.
-
 void _cwskit_dc_move_next(const _cwskit_datachainlink_ptr_t preloaded_atomic_base, const _cwskit_datachainpair_ptr_t chain, const _cwskit_datachainlink_ptr_dealloc_f deallocator_f) {
 	// load the base entry.
 	_cwskit_datachainlink_ptr_t next = atomic_load_explicit(&preloaded_atomic_base->next, memory_order_acquire);
