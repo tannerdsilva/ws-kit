@@ -84,7 +84,11 @@ void _cwskit_dc_pass(const _cwskit_datachainpair_ptr_t chain, const _cwskit_ptr_
 }
 
 /// internal function that flushes a single writerchain entry.
-void _cwskit_dc_move_next(const _cwskit_datachainlink_ptr_t preloaded_atomic_base, const _cwskit_datachainpair_ptr_t chain, const _cwskit_datachainlink_ptr_dealloc_f deallocator_f) {
+/// - parameters:
+///		- preloaded_atomic_base: the pre-loaded atomic base pointer of the chain.
+///		- chain: the chain that this operation will act on.
+///		- consumer_f: the function that will consume the data from the chain.
+_cwskit_ptr_t _cwskit_dc_consume_next(const _cwskit_datachainlink_ptr_t preloaded_atomic_base, const _cwskit_datachainpair_ptr_t chain) {
 	// load the base entry.
 	_cwskit_datachainlink_ptr_t next = atomic_load_explicit(&preloaded_atomic_base->next, memory_order_acquire);
 	
@@ -99,6 +103,7 @@ void _cwskit_dc_move_next(const _cwskit_datachainlink_ptr_t preloaded_atomic_bas
 	atomic_fetch_sub_explicit(&chain->element_count, 1, memory_order_acq_rel);
 
 	// deallocate the current entry.
-	deallocator_f((void*)preloaded_atomic_base->ptr);
+	const _cwskit_ptr_t cur = preloaded_atomic_base->ptr;
 	free((void*)preloaded_atomic_base);
+	return cur;
 }
