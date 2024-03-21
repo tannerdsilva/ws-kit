@@ -39,14 +39,14 @@ extension WebSocket.Client {
 
 		/// required by NIOHTTPClientProtocolUpgrader - defines the headers that must be present in the upgrade response for the upgrade to be successful.
 		/// - this is needed for certain protocols, but not for websockets, so we can leave this alone.
-		internal let requiredUpgradeHeaders: [String] = []
+		internal let requiredUpgradeHeaders:[String] = []
 
 		/// the split url that this channel is connected to
 		private let surl:URL.Split
 		/// request key to be assigned to the `Sec-WebSocket-Key` HTTP header.
 		private let requestKey:String
 		/// largest incoming `WebSocketFrame` size in bytes. This is used to set the `maxFrameSize` on the `WebSocket` channel handler upon a successful upgrade.
-		private let maxWebSocketFrameSize: Int
+		private let maxWebSocketFrameSize:Int
 		/// called once the upgrade was successful or unsuccessful.
 		private let upgradePromise:EventLoopPromise<Void>
 		/// called once the upgrade was successful. This is the owners opportunity to add any needed handlers to the channel pipeline.
@@ -68,12 +68,12 @@ extension WebSocket.Client {
 		/// adds additional headers that are needed for a WebSocket upgrade request. It is important that it is done this way, as to have the "final say" in the values of these headers before they are written.
 		internal func addCustom(upgradeRequestHeaders:inout HTTPHeaders) {
 			let initialHeaderValues = upgradeRequestHeaders.count
-			upgradeRequestHeaders.replaceOrAdd(name: "Sec-WebSocket-Key", value: self.requestKey)
-			upgradeRequestHeaders.replaceOrAdd(name: "Sec-WebSocket-Version", value: "13")
+			upgradeRequestHeaders.replaceOrAdd(name:"Sec-WebSocket-Key", value:self.requestKey)
+			upgradeRequestHeaders.replaceOrAdd(name:"Sec-WebSocket-Version", value:"13")
 			// RFC 6455 requires this to be case-insensitively compared. However, many server sockets check explicitly for == "Upgrade", and SwiftNIO will (by default) send a header that is "upgrade" if not for this custom implementation with the NIOHTTPProtocolUpgrader protocol.
-			upgradeRequestHeaders.replaceOrAdd(name: "Connection", value:"Upgrade")
-			upgradeRequestHeaders.replaceOrAdd(name: "Upgrade", value: "websocket")
-			upgradeRequestHeaders.replaceOrAdd(name: "Host", value: self.surl.host)
+			upgradeRequestHeaders.replaceOrAdd(name:"Connection", value:"Upgrade")
+			upgradeRequestHeaders.replaceOrAdd(name:"Upgrade", value:"websocket")
+			upgradeRequestHeaders.replaceOrAdd(name:"Host", value:self.surl.host)
 			self.logger?.trace("applied upgrade-specific HTTP headers to outbound request. began with \(initialHeaderValues) headers, sending with \(upgradeRequestHeaders.count) headers.")
 		}
 		
