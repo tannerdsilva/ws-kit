@@ -1,19 +1,25 @@
 #include "cwskit_datachain.h"
+#include "cwskit_types.h"
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
+/// internal function that initializes a chain pair.
+/// - parameters:
+///		- deallocator_f: the function that will be used to free the memory of the pointers in the chain.
 _cwskit_datachainpair_t _cwskit_dc_init(const _cwskit_datachainlink_ptr_dealloc_f deallocator_f) {
-	_cwskit_datachainpair_t newpair = {
+	return (_cwskit_datachainpair_t){
 		.base = NULL,
 		.tail = NULL,
 		.element_count = 0,
 		.dealloc_f = deallocator_f
 	};
-	return newpair;
 }
 
+/// internal function that closes a chain and frees all entries.
+/// - parameters:
+///		- chain: the chain that this operation will act on.
 void _cwskit_dc_close(const _cwskit_datachainpair_ptr_t chain) {
 	// load the base entry.
 	_cwskit_datachainlink_ptr_t getbase = atomic_load_explicit(chain->base, memory_order_acquire);
@@ -37,8 +43,10 @@ void _cwskit_dc_close(const _cwskit_datachainpair_ptr_t chain) {
 	}
 }
 
-
 // internal function that attempts to install a link in the chain.
+// - parameters:
+//		- chain: the chain that this operation will act on.
+//		- link: the link that will be installed into the chain.
 // - returns: true if the install was successful and the element count could be incremented. false if the install was not successful.
 bool _cwskit_dc_pass_link(const _cwskit_datachainpair_ptr_t chain, const _cwskit_datachainlink_ptr_t link) {
 	// defines the value that we expect to find on the element we will append to...
@@ -71,6 +79,9 @@ bool _cwskit_dc_pass_link(const _cwskit_datachainpair_ptr_t chain, const _cwskit
 }
 
 /// user function that allows a user to pass a pointer to into the chain for processing.
+/// - parameters:
+///		- chain: the chain that this operation will act on.
+///		- ptr: the pointer that will be passed into the chain for storage.
 void _cwskit_dc_pass(const _cwskit_datachainpair_ptr_t chain, const _cwskit_ptr_t ptr) {
 	const struct _cwskit_datachainlink link_on_stack = {
 		.ptr = ptr,
@@ -87,23 +98,47 @@ void _cwskit_dc_pass(const _cwskit_datachainpair_ptr_t chain, const _cwskit_ptr_
 /// - parameters:
 ///		- preloaded_atomic_base: the pre-loaded atomic base pointer of the chain.
 ///		- chain: the chain that this operation will act on.
-///		- consumer_f: the function that will consume the data from the chain.
-_cwskit_ptr_t _cwskit_dc_consume_next(const _cwskit_datachainlink_ptr_t preloaded_atomic_base, const _cwskit_datachainpair_ptr_t chain) {
-	// load the base entry.
+///		- consumed_ptr: the pointer that will be set to the consumed pointer.
+/// - returns: true if the operation was successful and the element count could be decremented. false if the operation was not successful.
+bool _cwskit_dc_consume_next(_cwskit_datachainlink_ptr_t preloaded_atomic_base, const _cwskit_datachainpair_ptr_t chain, _cwskit_ptr_t *consumed_ptr) {
+	// load the next entry from the base.
 	_cwskit_datachainlink_ptr_t next = atomic_load_explicit(&preloaded_atomic_base->next, memory_order_acquire);
 	
-	// update the base and tail pointers based on how the store was applied to the chain.
+	bool success = false;
 	if (next == NULL) {
-		atomic_store_explicit(chain->tail, NULL, memory_order_release);
+		// we are currently processing the last entry in the chain, meaning it was stored at both the base and tail. swap the base and then write the tail unconditionally if successful.
+		success = atomic_compare_exchange_strong_explicit(chain->base, &preloaded_atomic_base, NULL, memory_order_release, memory_order_relaxed);
+		if (success == true) {
+			atomic_store_explicit(chain->tail, NULL, memory_order_release);
+		}
 	} else {
-		atomic_store_explicit(chain->base, next, memory_order_release);
+		// there is at least one more entry in the chain, so we can just update the base pointer.
+		success = atomic_compare_exchange_strong_explicit(chain->base, &preloaded_atomic_base, next, memory_order_release, memory_order_relaxed);
 	}
 
-	// decrement the atomic count to reflect the new entry.
-	atomic_fetch_sub_explicit(&chain->element_count, 1, memory_order_acq_rel);
+	if (success == true) {
+		// decrement the atomic count to reflect the new entry.
+		atomic_fetch_sub_explicit(&chain->element_count, 1, memory_order_acq_rel);
+		*consumed_ptr = preloaded_atomic_base->ptr;
+		free((void*)preloaded_atomic_base);
+	}
+	return success;
+}
 
-	// deallocate the current entry.
-	const _cwskit_ptr_t cur = preloaded_atomic_base->ptr;
-	free((void*)preloaded_atomic_base);
-	return cur;
+/// user function that allows a user to consume a pointer from the chain for processing.
+/// - parameters:
+///		- chain: the chain that this operation will act on.
+///		- consumer_f: the function that will be used to consume the pointer.
+bool _cwskit_dc_consume(const _cwskit_datachainpair_ptr_t chain, const _cwskit_datachainlink_ptr_consume_f consumer_f) {
+	// load the base entry.
+	bool consume_success = false;
+	_cwskit_ptr_t consumed;
+	do {
+		consume_success = _cwskit_dc_consume_next(atomic_load_explicit(chain->base, memory_order_acquire), chain, &consumed);
+	} while (consume_success == false && atomic_load_explicit(&chain->element_count, memory_order_acquire) > 0);
+	if (consume_success == true) {
+		consumer_f(consumed);
+		chain->dealloc_f(consumed);
+	}
+	return consume_success;
 }
