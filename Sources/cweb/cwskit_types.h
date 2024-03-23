@@ -12,4 +12,6 @@ typedef void*_Nonnull _cwskit_ptr_t;
 /// optional pointer to a boolean value.
 typedef bool*_Nullable _cwskit_bool_optr_t;
 
+typedef uint64_t*_Nonnull _cwskit_uint64_ptr_t;
+
 #endif
