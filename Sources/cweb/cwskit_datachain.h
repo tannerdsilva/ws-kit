@@ -29,9 +29,9 @@ typedef struct _cwskit_datachainpair {
 	_cwskit_datachainlink_aptr_ptr_t base;
 	/// pointer to the tail of the chain, enabling efficient addition of new elements.
 	_cwskit_datachainlink_aptr_ptr_t tail;
-	/// atomic counter representing the number of elements in the chain, ensuring thread-safe operations.
+	/// atomic counter representing the number of elements in the chain.
 	_Atomic uint64_t element_count;
-	/// function pointer for deallocating memory of the data pointers, allowing for flexible memory management.
+	/// function pointer for deallocating memory of the stored pointers.
 	const _cwskit_datachainlink_ptr_dealloc_f dealloc_f;
 } _cwskit_datachainpair_t;
 

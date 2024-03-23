@@ -9,4 +9,7 @@ typedef void*_Nullable _cwskit_optr_t;
 /// nonoptional pointer type.
 typedef void*_Nonnull _cwskit_ptr_t;
 
+/// optional pointer to a boolean value.
+typedef bool*_Nullable _cwskit_bool_optr_t;
+
 #endif
