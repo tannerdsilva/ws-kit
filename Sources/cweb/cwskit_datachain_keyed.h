@@ -29,7 +29,7 @@ typedef struct _cwskit_atomiclist_keyed {
 /// primary storage container for the atomic list.
 typedef struct _cwskit_atomiclistpair_keyed {
 	/// the base storage slot for the list instance.
-	_cwskit_atomiclist_keyed_aptr_ptr_t base;
+	_cwskit_atomiclist_keyed_aptr_t base;
 	/// the tail of the list, used for efficient addition of new elements.
 	_Atomic size_t element_count;
 	/// an internal value that increments with each new item added. this essentially represents the "next item's key"

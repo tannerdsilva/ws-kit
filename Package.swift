@@ -60,7 +60,7 @@ let package = Package(
 		),
 		.testTarget(
 			name:"WebCoreTests",
-			dependencies:["WebSocket"]
+			dependencies:["WebSocket", "WebCore"]
 		)
 
 	]

@@ -23,7 +23,7 @@ bool _cwskit_al_close_keyed(const _cwskit_atomiclistpair_keyed_ptr_t list) {
 	if (__builtin_expect(atomic_compare_exchange_strong_explicit(&list->_mutation_delta, &expected_mutation_delta, 1, memory_order_release, memory_order_relaxed), true)) {
 
 		// iterate through the list and free all entries
-		_cwskit_atomiclist_keyed_ptr_t current = atomic_load_explicit(list->base, memory_order_acquire);
+		_cwskit_atomiclist_keyed_ptr_t current = atomic_load_explicit(&list->base, memory_order_acquire);
 		while (current != NULL) {
 			_cwskit_atomiclist_keyed_ptr_t next = atomic_load_explicit(&current->next, memory_order_acquire);
 			list->dealloc_f(current->ptr);
@@ -76,10 +76,10 @@ bool _cwskit_al_insert_internal(const _cwskit_atomiclistpair_keyed_ptr_t list, c
 	// this function does not need to influence the mutation delta.
 
 	// load the current base
-    _cwskit_atomiclist_keyed_ptr_t expectedbase = atomic_load_explicit(list->base, memory_order_acquire);
+    _cwskit_atomiclist_keyed_ptr_t expectedbase = atomic_load_explicit(&list->base, memory_order_acquire);
 	
 	// write the new item to the list
-	if (__builtin_expect(atomic_compare_exchange_strong_explicit(list->base, &expectedbase, item, memory_order_release, memory_order_acquire), true)) {
+	if (__builtin_expect(atomic_compare_exchange_strong_explicit(&list->base, &expectedbase, item, memory_order_release, memory_order_acquire), true)) {
 		// make sure that the next item in this base correctly references the old base value
 		atomic_store_explicit(&item->next, expectedbase, memory_order_release);
 
@@ -133,7 +133,7 @@ bool _cwskit_al_remove(const _cwskit_atomiclistpair_keyed_ptr_t chain, const uin
 		return false;
 	}
 
-	_cwskit_atomiclist_keyed_ptr_t current = atomic_load_explicit(chain->base, memory_order_acquire);
+	_cwskit_atomiclist_keyed_ptr_t current = atomic_load_explicit(&chain->base, memory_order_acquire);
     while (current != NULL) {
 		// load the next item of current
         _cwskit_atomiclist_keyed_ptr_t next = atomic_load_explicit(&current->next, memory_order_acquire);
@@ -141,7 +141,7 @@ bool _cwskit_al_remove(const _cwskit_atomiclistpair_keyed_ptr_t chain, const uin
         if (current->key == key) {
 
 			// remove the current item from the list
-            if (__builtin_expect(atomic_compare_exchange_strong_explicit(chain->base, &current, next, memory_order_release, memory_order_relaxed), true)) {
+            if (__builtin_expect(atomic_compare_exchange_strong_explicit(&chain->base, &current, next, memory_order_release, memory_order_relaxed), true)) {
 				// remove successful. fire the consumer and handle the removal here
 				consumer_f(key, current->ptr);
 				chain->dealloc_f(current->ptr);
@@ -175,7 +175,7 @@ bool _cwskit_al_iterate(const _cwskit_atomiclistpair_keyed_ptr_t list, const _cw
 		// mutate the mutation value, to -1 the current value, to indicate that the list is being iterated.
 		if (__builtin_expect(atomic_compare_exchange_strong_explicit(&list->_mutation_delta, &mutation_delta, mutation_delta - 1, memory_order_release, memory_order_relaxed), true)) {
 			// the list is not being modified. iterate through the list.
-			_cwskit_atomiclist_keyed_ptr_t current = atomic_load_explicit(list->base, memory_order_acquire);
+			_cwskit_atomiclist_keyed_ptr_t current = atomic_load_explicit(&list->base, memory_order_acquire);
 			while (current != NULL) {
 				consumer_f(current->key, current->ptr);
 				current = atomic_load_explicit(&current->next, memory_order_acquire);
