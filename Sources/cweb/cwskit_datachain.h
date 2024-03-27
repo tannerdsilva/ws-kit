@@ -74,7 +74,8 @@ _cwskit_datachainpair_t _cwskit_dc_init();
 /// deinitializes a datachain, freeing all associated memory and resources.
 /// @param chain pointer to the datachain to be deinitialized.
 /// @param deallocator_f function used for deallocating memory of data pointers.
-void _cwskit_dc_close(const _cwskit_datachainpair_ptr_t chain, const _cwskit_datachainlink_ptr_consume_f deallocator_f);
+/// @return the deallocated cap pointer if the chain was capped; NULL if the chain was not capped.
+_cwskit_optr_t _cwskit_dc_close(const _cwskit_datachainpair_ptr_t chain, const _cwskit_datachainlink_ptr_consume_f deallocator_f);
 
 // data handling
 

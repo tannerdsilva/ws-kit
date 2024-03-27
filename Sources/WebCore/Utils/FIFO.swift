@@ -208,12 +208,17 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 	}
 
 	internal borrowing func finish() {
-		_cwskit_dc_pass_cap(&fifo, nil)
+		_ = _cwskit_dc_pass_cap(&fifo, nil)
 	}
 
 	deinit {
-		_cwskit_dc_close(&fifo, { ptr in
+		switch (_cwskit_dc_close(&fifo, { ptr in
 			Unmanaged<Contained>.fromOpaque(ptr).release()
-		})
+		})) {
+			case .some(let ptr):
+				Unmanaged<ContainedError>.fromOpaque(ptr).release()
+			case .none:
+				break
+		}
 	}
 }

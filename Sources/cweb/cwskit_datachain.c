@@ -23,21 +23,6 @@ _cwskit_datachainpair_t _cwskit_dc_init() {
 	return chain;
 }
 
-bool _cwskit_dc_pass_cap(const _cwskit_datachainpair_ptr_t chain, const _cwskit_optr_t ptr) {
-	bool expected_cap = false;	// we expect the chain to NOT be capped
-	bool apply_success;			// this is where the result of the atomic operation will be stored.
-	do {
-		// attempt to apply the cap to the chain until it succeeds or someone beats us to it.
-		apply_success = atomic_compare_exchange_weak_explicit(&chain->_is_capped, &expected_cap, true, memory_order_release, memory_order_acquire);
-	} while (__builtin_expect(apply_success == false && expected_cap == false, false));
-	if (__builtin_expect(apply_success == true, true)) {
-		// successfully capped. now assign the capper pointer and store the number of remaining elements in the fifo.
-		atomic_store_explicit(&chain->_cap_ptr, ptr, memory_order_release);
-		pthread_cond_signal(&chain->cond);
-	}
-	return apply_success;
-}
-
 bool _cwskit_can_issue_continuation(const _cwskit_datachainpair_deploy_guarantees_ptr_t deploys) {
 	if (atomic_load_explicit(&deploys->is_continuation_issued, memory_order_acquire) == false) {
 		atomic_store_explicit(&deploys->is_continuation_issued, true, memory_order_release);
@@ -55,29 +40,45 @@ bool _cwskit_can_issue_consumer(const _cwskit_datachainpair_deploy_guarantees_pt
 	}
 }
 
-void _cwskit_dc_close(const _cwskit_datachainpair_ptr_t chain, const _cwskit_datachainlink_ptr_consume_f deallocator_f) {
+_cwskit_optr_t _cwskit_dc_close(const _cwskit_datachainpair_ptr_t chain, const _cwskit_datachainlink_ptr_consume_f deallocator_f) {
 	// load the base entry.
 	_cwskit_datachainlink_ptr_t current = atomic_load_explicit(&chain->base, memory_order_acquire);
 	
-	if (current == NULL) {
-		// there are no entries to free or handle so we can return.
-		return;
-	} else {
-		// place NULL at the base and tail so that others aren't able to manipulate the chain while we work to free it.
-		atomic_store_explicit(&chain->base, NULL, memory_order_release);
-		atomic_store_explicit(&chain->tail, NULL, memory_order_release);
-	}
+	// place NULL at the base and tail so that others aren't able to manipulate the chain while we work to free it.
+	atomic_store_explicit(&chain->base, NULL, memory_order_release);
+	atomic_store_explicit(&chain->tail, NULL, memory_order_release);
 	
 	// iterate through the chain and free all entries
-	do {
+	while (current != NULL) {
 		_cwskit_datachainlink_ptr_t next = atomic_load_explicit(&current->next, memory_order_acquire);
 		deallocator_f(current->ptr);
 		free(current);
 		current = next;
-	} while (current != NULL);
+	}
 
 	pthread_cond_destroy(&chain->cond);
 	pthread_mutex_destroy(&chain->mutex);
+
+	if (atomic_load_explicit(&chain->_is_capped, memory_order_acquire) == true) {
+		return atomic_load_explicit(&chain->_cap_ptr, memory_order_acquire);
+	} else {
+		return NULL;
+	}
+}
+
+bool _cwskit_dc_pass_cap(const _cwskit_datachainpair_ptr_t chain, const _cwskit_optr_t ptr) {
+	bool expected_cap = false;	// we expect the chain to NOT be capped
+	bool apply_success;			// this is where the result of the atomic operation will be stored.
+	do {
+		// attempt to apply the cap to the chain until it succeeds or someone beats us to it.
+		apply_success = atomic_compare_exchange_weak_explicit(&chain->_is_capped, &expected_cap, true, memory_order_release, memory_order_acquire);
+	} while (__builtin_expect(apply_success == false && expected_cap == false, false));
+	if (__builtin_expect(apply_success == true, true)) {
+		// successfully capped. now assign the capper pointer and store the number of remaining elements in the fifo.
+		atomic_store_explicit(&chain->_cap_ptr, ptr, memory_order_release);
+		pthread_cond_signal(&chain->cond);
+	}
+	return apply_success;
 }
 
 // internal function that attempts to install a link in the chain. this function does not care about the cap state of the chain and does not increment the element count.
