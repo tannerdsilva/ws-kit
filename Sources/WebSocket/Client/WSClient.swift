@@ -56,13 +56,13 @@ public final actor Client:Sendable {
 	// - the various continuations that this client will use to send data to the user.
 	
 	/// the continuation that will be used to send text data to the user.
-	fileprivate let textStream:AsyncStream<String> = AsyncStream<String>()
+	public let textStream:AsyncStream<String> = AsyncStream<String>()
 	/// the continuation that will be used to send binary data to the user.
-	fileprivate let binaryStream:AsyncStream<[UInt8]> = AsyncStream<[UInt8]>()
+	public let binaryStream:AsyncStream<[UInt8]> = AsyncStream<[UInt8]>()
 	/// the continuation that will be used to send latency data to the user (latency as measured by ping and pong messages)
-	fileprivate let latencyStream:AsyncStream<MeasuredLatency> = AsyncStream<MeasuredLatency>()
+	public let latencyStream:AsyncStream<MeasuredLatency> = AsyncStream<MeasuredLatency>()
 	/// the continuation that will be used to send connection stage data to the user.
-	fileprivate let stateStream:AsyncStream<State> = AsyncStream<State>()
+	public let stateStream:AsyncStream<State> = AsyncStream<State>()
 
 	/// the current state of this client.
 	fileprivate var disconnectionWaiters:[UnsafeContinuation<Void, Swift.Error>] = []
