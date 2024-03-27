@@ -35,8 +35,8 @@ bool _cwskit_al_next_key(const _cwskit_atomiclistpair_keyed_ptr_t list, uint64_t
 	// load the existing value.
 	uint64_t acquireValue = atomic_load_explicit(&list->_id_increment_internal, memory_order_acquire);
 	
-	// check if the integer is about to overflow
-	if (__builtin_expect(acquireValue < ULLONG_MAX, true)) {
+	// check if the integer is about to overflow (irrationally padded by 64 because safety is my style)
+	if (__builtin_expect(acquireValue < (ULLONG_MAX - 64), true)) {
 		// no overflow anticipated. increment the existing value and attempt to write it to the atomic location where this value is stored.
 		if (__builtin_expect(atomic_compare_exchange_weak_explicit(&list->_id_increment_internal, &acquireValue, acquireValue + 1, memory_order_release, memory_order_acquire), true)) {
 			// successful case. write the new value to the passed uint64_t pointer
@@ -69,12 +69,11 @@ bool _cwskit_al_insert_internal(const _cwskit_atomiclistpair_keyed_ptr_t list, c
 	if (__builtin_expect(atomic_compare_exchange_strong_explicit(&list->base, &expectedbase, item, memory_order_release, memory_order_acquire), true)) {
 		// make sure that the next item in this base correctly references the old base value
 		atomic_store_explicit(&item->next, expectedbase, memory_order_release);
-
 		// increment the element count
 		atomic_fetch_add_explicit(&list->element_count, 1, memory_order_acq_rel);
-		return true;
+		return true; // successful write.
 	} else {
-		return false;
+		return false; // unsuccessful write.
 	}
 }
 
@@ -84,16 +83,18 @@ bool _cwskit_al_insert_internal(const _cwskit_atomiclistpair_keyed_ptr_t list, c
 /// @return true if the element was successfully inserted, false if the element could not be inserted.
 uint64_t _cwskit_al_insert(const _cwskit_atomiclistpair_keyed_ptr_t list, const _cwskit_ptr_t ptr) {
 	uint64_t new_id_internal;
-	// acquire an unused key for the new element. if this fails, return false, but we expect it to succeed.
+	// acquire an unused key for the new element. if this fails (not expected), retry until it succeeds.
 	while (__builtin_expect(_cwskit_al_next_key(list, &new_id_internal) == false, false)) {}
 	// package the new item on stack memory, with the new key and the pointer to the data.
     const struct _cwskit_atomiclist_keyed link_on_stack = {
         .key = new_id_internal,
         .ptr = ptr
     };
+	// while (true) {}
 	// copy the stack memory to heap memory, and insert the heap memory into the atomic list.
     const _cwskit_atomiclist_keyed_ptr_t link_on_heap = memcpy(malloc(sizeof(link_on_stack)), &link_on_stack, sizeof(link_on_stack));
    	while (__builtin_expect(_cwskit_al_insert_internal(list, link_on_heap) == false, false)) {}
+	// while (true) {}
 	return new_id_internal;
 }
 
@@ -111,19 +112,20 @@ int8_t _cwskit_al_remove_try(_cwskit_atomiclist_keyed_aptr_t*_Nonnull base, cons
 
 			// remove the current item from the list. if it fails, the whole operation should be retried.
 			if (__builtin_expect(atomic_compare_exchange_strong_explicit(base, &current, next, memory_order_release, memory_order_relaxed) == false, false)) {
-				return -1;
+				return -1; // retry
 			}
 			
 			// remove successful. fire the consumer and handle the removal here
 			*ptr_out = current->ptr;
 			free(current);
-			return 1;
+			return 1; // successful removal
 		}
 
 		// increment for next iteration
 		base = &current->next;
 		current = next;
 	}
+	// no element was found with the key.
 	return 0;
 }
 

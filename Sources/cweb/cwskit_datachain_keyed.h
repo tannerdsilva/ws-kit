@@ -1,5 +1,5 @@
-#ifndef _WSKIT_DATACHAIN_KEYED_H
-#define _WSKIT_DATACHAIN_KEYED_H
+#ifndef _WSKIT_ATOMICLIST_KEYED_H
+#define _WSKIT_ATOMICLIST_KEYED_H
 
 #include "cwskit_types.h"
 #include <sys/types.h>
@@ -52,10 +52,10 @@ void _cwskit_al_close_keyed(const _cwskit_atomiclistpair_keyed_ptr_t list, const
 
 // data handling.
 
-/// inserts a new data pointer into the atomic list for storage and future processing.
+/// inserts a new data pointer into the atomic list.
 /// @param list pointer to the atomic list pair instance.
 /// @param ptr pointer to the data to be stored in the atomic list.
-/// @return true if the element was successfully inserted, false if the element could not be inserted.
+/// @return the new key value associated with the data pointer.
 uint64_t _cwskit_al_insert(const _cwskit_atomiclistpair_keyed_ptr_t list, const _cwskit_ptr_t ptr);
 
 /// removes a key (and its corresponding stored pointer) from the atomic list.
@@ -69,4 +69,4 @@ _cwskit_optr_t _cwskit_al_remove(const _cwskit_atomiclistpair_keyed_ptr_t chain,
 /// @param consumer_f function used to process each data pointer in the atomic list.
 void _cwskit_al_iterate(const _cwskit_atomiclistpair_keyed_ptr_t list, const _cwskit_atomiclist_consumer_keyed_ptr_f consumer_f);
 
-#endif // _WSKIT_DATACHAIN_KEYED_H
+#endif // _WSKIT_ATOMICLIST_KEYED_H

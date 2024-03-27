@@ -1,38 +1,56 @@
 import cweb
 
-// public final class AsyncStream2<T>:AsyncSequence {
-//     // internal typealias Element = T
+public final class AsyncStream2<T>:AsyncSequence {
+	public typealias Element = T
 
-// 	public final class AsyncIterator:AsyncIteratorProtocol {
-// 	    public borrowing func next() async -> T? {
-// 			return await asyncIterator.next()
-// 	    }
+	public final class AsyncIterator:AsyncIteratorProtocol {
+		public borrowing func next() async throws -> T? {
+			return try await fifo.next()
+		}
 
-// 	    public typealias Element = T
+		public typealias Element = T
 
-// 		public let key:UInt64
-// 		public let fifo:FIFO<T>
-// 		private let al:AtomicList<FIFO<T>>
-// 		internal init(al:AtomicList<FIFO<T>>) {
-// 			self.fifo = FIFO<T>()
-// 			self.key = al.insert(self.fifo)
-// 			self.al = al
-// 		}
-// 		deinit {
-// 			_ = al.remove(key)
-// 		}
-// 		internal init() {}
-// 	}
+		private let key:UInt64
+		private let fifo:FIFO<T>.AsyncIterator
+		private let al:AtomicList<FIFO<T>.Continuation>
+		internal init(al:AtomicList<FIFO<T>.Continuation>, fifo:FIFO<T>) {
+			self.key = al.insert(fifo.makeContinuation())
+			self.fifo = fifo.makeAsyncIterator()
+			self.al = al
+		}
+		deinit {
+			_ = al.remove(key)
+		}
+	}
 
-// 	internal func makeAsyncIterator() -> AsyncIterator {
-// 		let fifo = FIFO<T>()
-// 		let myInt = al.insert(fifo)
-// 		return fifo.makeAsyncIterator()
-// 	}
-// 	private let al = AtomicList<FIFO<T>>()
+	public func makeAsyncIterator() -> AsyncIterator {
+		return AsyncIterator(al:al, fifo: FIFO<T>())
+	}
+	private let al = AtomicList<FIFO<T>.Continuation>()
 
-// 	internal init() {}
-// }
+	internal init() {}
+
+	public func yield(_ data:consuming T) -> Int {
+		var i = 0
+		al.forEach({ _, continuation in
+			i += 1
+			continuation.push(data)
+		})
+		return i
+	}
+
+	public func finish() {
+		al.forEach({ _, continuation in
+			continuation.finish()
+		})
+	}
+
+	public func finish(throwing:Swift.Error) {
+		al.forEach({ _, continuation in
+			continuation.finish(throwing:throwing)
+		})
+	}
+}
 
 internal final class AtomicList<T> {
 	private var list_store = _cwskit_al_init_keyed()
@@ -52,6 +70,13 @@ internal final class AtomicList<T> {
 		internal consuming func takeStored() -> T {
 			return store
 		}
+	}
+
+	internal borrowing func forEach(_ body:@escaping (UInt64, T) -> Void) {
+		_cwskit_al_iterate(&list_store, { key, ptr in
+			let um = Unmanaged<Contained>.fromOpaque(ptr).takeUnretainedValue()
+			body(key, um.takeStored())
+		})
 	}
 
 	internal borrowing func insert(_ data:consuming T) -> UInt64 {
@@ -100,11 +125,7 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 			self.dataSequence = dataSequence
 		}
 		public borrowing func next() async throws -> T? {
-			return try await withTaskCancellationHandler(operation: {
-				return try await dataSequence.pop()
-			}, onCancel: {
-				dataSequence.finish()
-			})
+			return try await dataSequence.pop()
 		}
 	}
 
@@ -115,6 +136,12 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 		}
 		public borrowing func push(_ data:consuming T) {
 			dataSequence.push(data)
+		}
+		public borrowing func finish() {
+			dataSequence.finish()
+		}
+		public borrowing func finish(throwing:Swift.Error) {
+			dataSequence.finish(throwing:throwing)
 		}
 	} 
 
@@ -163,10 +190,6 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 		// consume the next item without blocking
 		switch _cwskit_dc_consume(&fifo, false, &cptr) {
 			case -1: // would block - try again in a continuation if the task is not currently cancelled
-				guard Task.isCancelled == false else {
-					return nil
-				}
-
 				return try await withUnsafeThrowingContinuation({ (cont:UnsafeContinuation<T?, Swift.Error>) in
 					switch _cwskit_dc_consume(&fifo, true, &cptr) {
 						case -1:
@@ -174,7 +197,12 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 						case 0:
 							return cont.resume(returning:scenarioFIFO(cptr!))
 						case 1:
-							return cont.resume(throwing:scenarioCap(cptr!))
+							switch cptr {
+								case .some(let ptr):
+									return cont.resume(throwing:scenarioCap(ptr))
+								case .none:
+									return cont.resume(returning:nil)
+							}
 						default:
 							fatalError("unknown return code from _cwskit_dc_consume")
 					}
@@ -200,6 +228,7 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 	}
 
 	internal borrowing func finish(throwing:Swift.Error) {
+		// unbalanced retain on the error - it is released in deinit
 		let um = Unmanaged.passRetained(ContainedError(throwing))
 		guard _cwskit_dc_pass_cap(&fifo, um.toOpaque()) == true else {
 			um.release()
@@ -208,14 +237,17 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 	}
 
 	internal borrowing func finish() {
+		// no need to account for success here since the passed pointer is nil
 		_ = _cwskit_dc_pass_cap(&fifo, nil)
 	}
 
 	deinit {
 		switch (_cwskit_dc_close(&fifo, { ptr in
+			// release a fifo item that wsa passed after it was capped
 			Unmanaged<Contained>.fromOpaque(ptr).release()
 		})) {
 			case .some(let ptr):
+				// release the capping error
 				Unmanaged<ContainedError>.fromOpaque(ptr).release()
 			case .none:
 				break

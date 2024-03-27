@@ -89,4 +89,80 @@ final class FifoTests: XCTestCase {
 			XCTAssertEqual(poppedData, testAgaaint[i], "Popped data should match the pushed data")
 		}
     }
+
+	// // Test the behavior of AsyncStream2 with one consumer
+    func testSingleConsumer() async throws {
+        let stream = AsyncStream2<Int>()
+        let consumerCount = 1
+        let expectedData = 42
+
+        Task { [consumer = stream.makeAsyncIterator()] in
+			var i = 0
+            while let data = try await consumer.next() {
+                // XCTAssertEqual(data, expectedData, "Consumer should receive the expected data")
+				i += 1
+            }
+			XCTAssertEqual(i, 1, "Consumer should receive the expected data")
+        }
+
+        Task {
+			XCTAssertEqual(stream.yield(expectedData), 1, "Consumer should receive the expected data")
+            stream.finish()
+        }
+
+        await Task.sleep(1) // Wait for the tasks to complete
+    }
+
+    // Test the behavior of AsyncStream2 with multiple consumers
+    func testMultipleConsumers() async throws {
+        let stream = AsyncStream2<Int>()
+        let consumerCount = 5
+        let expectedData = 42
+
+        for _ in 0..<consumerCount {
+            Task { [consumer = stream.makeAsyncIterator()] in
+                while let data = try await consumer.next() {
+                    XCTAssertEqual(data, expectedData, "Consumer should receive the expected data")
+                }
+            }
+        }
+
+        Task {
+			stream.yield(expectedData)
+            // for _ in 0..<consumerCount {
+            //     stream.yield(expectedData)
+            // }
+            stream.finish()
+        }
+
+        await Task.sleep(1) // Wait for the tasks to complete
+    }
+
+	func testInsertAndRemove() {
+        let atomicList = AtomicList<Int>()
+        
+        let key1 = atomicList.insert(1)
+        let key2 = atomicList.insert(2)
+        let key3 = atomicList.insert(3)
+        
+        XCTAssertEqual(atomicList.remove(key1), 1, "Removed value should match the inserted value")
+        XCTAssertEqual(atomicList.remove(key2), 2, "Removed value should match the inserted value")
+        XCTAssertEqual(atomicList.remove(key3), 3, "Removed value should match the inserted value")
+        XCTAssertNil(atomicList.remove(key1), "Removing a non-existent key should return nil")
+    }
+    
+    func testForEach() {
+        let atomicList = AtomicList<String>()
+        
+        atomicList.insert("Apple")
+        atomicList.insert("Banana")
+        atomicList.insert("Orange")
+        
+        var result = Set<String>()
+        atomicList.forEach { _, value in
+            result.update(with:value)
+        }
+        
+        XCTAssertEqual(result, ["Apple", "Banana", "Orange"], "ForEach should iterate over all inserted values")
+    }
 }
