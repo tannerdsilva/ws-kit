@@ -31,13 +31,13 @@ extension Client {
 
 		// variables that are configured by the implementers of this class.
 		/// handles text messages that are received from the remote peer.
-		private let textStream:AsyncStream2<String>
+		private let textStream:AsyncStream<String>
 		/// handles binary messages that are received from the remote peer.
-		private let binaryStream:AsyncStream2<[UInt8]>
+		private let binaryStream:AsyncStream<[UInt8]>
 		/// handles latency measurements that are received from the remote peer.
-		private let latencyStream:AsyncStream2<MeasuredLatency>
+		private let latencyStream:AsyncStream<MeasuredLatency>
 
-		internal init(log:Logger?, textStream:AsyncStream2<String>, binaryStream:AsyncStream2<[UInt8]>, latencyStream:AsyncStream2<MeasuredLatency>) {
+		internal init(log:Logger?, textStream:AsyncStream<String>, binaryStream:AsyncStream<[UInt8]>, latencyStream:AsyncStream<MeasuredLatency>) {
 			var modLogger = log
 			if log != nil {
 				modLogger![metadataKey:"type"] = "Client.Capper"

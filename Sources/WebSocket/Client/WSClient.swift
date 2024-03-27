@@ -56,13 +56,13 @@ public final actor Client:Sendable {
 	// - the various continuations that this client will use to send data to the user.
 	
 	/// the continuation that will be used to send text data to the user.
-	fileprivate let textStream:AsyncStream2<String> = AsyncStream2<String>()
+	fileprivate let textStream:AsyncStream<String> = AsyncStream<String>()
 	/// the continuation that will be used to send binary data to the user.
-	fileprivate let binaryStream:AsyncStream2<[UInt8]> = AsyncStream2<[UInt8]>()
+	fileprivate let binaryStream:AsyncStream<[UInt8]> = AsyncStream<[UInt8]>()
 	/// the continuation that will be used to send latency data to the user (latency as measured by ping and pong messages)
-	fileprivate let latencyStream:AsyncStream2<MeasuredLatency> = AsyncStream2<MeasuredLatency>()
+	fileprivate let latencyStream:AsyncStream<MeasuredLatency> = AsyncStream<MeasuredLatency>()
 	/// the continuation that will be used to send connection stage data to the user.
-	fileprivate let stateStream:AsyncStream2<State> = AsyncStream2<State>()
+	fileprivate let stateStream:AsyncStream<State> = AsyncStream<State>()
 
 	/// the current state of this client.
 	fileprivate var disconnectionWaiters:[UnsafeContinuation<Void, Swift.Error>] = []
@@ -121,7 +121,6 @@ public final actor Client:Sendable {
 		let (c, _) = try await Client.protoboot(log:useLogger, url:url, headers:[:], configuration:configuration, on:eventLoop, handlerBuilder: { logger, pipeline in
 			// this is where we need to build the data pipeline for this network connection. the base interface here is the Message type.
 			let makeCapper = Capper(log:logger, textStream:self.textStream, binaryStream:self.binaryStream, latencyStream:self.latencyStream)
-			
 			makeCapper.registerClosureHandler({ closureResult in
 				Task.detached {
 					await self.disconnectionEvent(result:closureResult)

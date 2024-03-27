@@ -1,6 +1,6 @@
 import cweb
 
-public struct AsyncStream2<T>:AsyncSequence {
+public struct AsyncStream<T>:AsyncSequence {
 	public typealias Element = T
 	public final class AsyncIterator:AsyncIteratorProtocol {
 		public borrowing func next() async throws -> T? {

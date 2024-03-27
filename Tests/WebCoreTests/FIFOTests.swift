@@ -122,7 +122,7 @@ final class FifoTests: XCTestCase {
         let expectedData = 42
 
 		try await withThrowingTaskGroup(of:Void.self) { tg in
-			let stream = AsyncStream2<Int>()
+			let stream = AsyncStream<Int>()
 			for _ in 0..<consumerCount {
 				tg.addTask { [consumer = stream.makeAsyncIterator()] in
 					var i = 0
