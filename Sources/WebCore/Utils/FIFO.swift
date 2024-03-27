@@ -1,8 +1,7 @@
 import cweb
 
-public final class AsyncStream2<T>:AsyncSequence {
+public struct AsyncStream2<T>:AsyncSequence {
 	public typealias Element = T
-
 	public final class AsyncIterator:AsyncIteratorProtocol {
 		public borrowing func next() async throws -> T? {
 			return try await fifo.next()
@@ -22,37 +21,33 @@ public final class AsyncStream2<T>:AsyncSequence {
 			_ = al.remove(key)
 		}
 	}
-
 	public func makeAsyncIterator() -> AsyncIterator {
 		return AsyncIterator(al:al, fifo: FIFO<T>())
 	}
 	private let al = AtomicList<FIFO<T>.Continuation>()
 
-	internal init() {}
+	public init() {}
 
-	public func yield(_ data:consuming T) -> Int {
-		var i = 0
+	public borrowing func yield(_ data:consuming T) {
 		al.forEach({ _, continuation in
-			i += 1
 			continuation.push(data)
 		})
-		return i
 	}
 
-	public func finish() {
+	public borrowing func finish() {
 		al.forEach({ _, continuation in
 			continuation.finish()
 		})
 	}
 
-	public func finish(throwing:Swift.Error) {
+	public borrowing func finish(throwing:Swift.Error) {
 		al.forEach({ _, continuation in
 			continuation.finish(throwing:throwing)
 		})
 	}
 }
 
-internal final class AtomicList<T> {
+internal final class AtomicList<T>:@unchecked Sendable {
 	private var list_store = _cwskit_al_init_keyed()
 	deinit {
 		_cwskit_al_close_keyed(&list_store, { key, ptr in
@@ -74,23 +69,18 @@ internal final class AtomicList<T> {
 
 	internal borrowing func forEach(_ body:@escaping (UInt64, T) -> Void) {
 		_cwskit_al_iterate(&list_store, { key, ptr in
-			let um = Unmanaged<Contained>.fromOpaque(ptr).takeUnretainedValue()
-			body(key, um.takeStored())
+			body(key, Unmanaged<Contained>.fromOpaque(ptr).takeUnretainedValue().takeStored())
 		})
 	}
 
 	internal borrowing func insert(_ data:consuming T) -> UInt64 {
-		_cwskit_al_insert(&list_store, Unmanaged.passRetained(Contained(store:data)).toOpaque())
+		return _cwskit_al_insert(&list_store, Unmanaged.passRetained(Contained(store:data)).toOpaque())
 	}
 
-	internal borrowing func remove(_ key:UInt64) -> T? {
+	@discardableResult internal borrowing func remove(_ key:UInt64) -> T? {
 		switch (_cwskit_al_remove(&list_store, key)) {
 			case .some(let contained):
-				let um = Unmanaged<Contained>.fromOpaque(contained)
-				defer {
-					um.release()
-				}
-				return um.takeUnretainedValue().takeStored()
+				return Unmanaged<Contained>.fromOpaque(contained).takeRetainedValue().takeStored()
 			case .none:
 				return nil
 		}
@@ -125,7 +115,21 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 			self.dataSequence = dataSequence
 		}
 		public borrowing func next() async throws -> T? {
-			return try await dataSequence.pop()
+			repeat {
+				switch dataSequence._pop_internal_sync() {
+					case .cappedError(let error):
+						throw error
+					case .cappedNil:
+						return nil
+					case .fifo(let item):
+						return item
+					case .wouldBlock:
+						await withUnsafeContinuation({
+							_cwskit_dc_block_thread(&dataSequence.fifo)
+							$0.resume()
+						})
+				}
+			} while true
 		}
 	}
 
@@ -170,56 +174,42 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 	internal borrowing func push(_ data:consuming T) {
 		_cwskit_dc_pass(&fifo, Unmanaged.passRetained(Contained(store:data)).toOpaque())
 	}
-	internal borrowing func pop() async throws -> T? {
+
+	private enum _pop_internal_sync_result {
+		case wouldBlock
+		case fifo(T)
+		case cappedError(Swift.Error)
+		case cappedNil
+	}
+	private borrowing func _pop_internal_sync() -> _pop_internal_sync_result {
 		// handles a fifo pointer from the c library
 		func scenarioFIFO(_ op:UnsafeRawPointer) -> T {
-			let um = Unmanaged<Contained>.fromOpaque(op)
-			defer {
-				um.release()
-			}
-			return um.takeUnretainedValue().takeStored()
+			return Unmanaged<Contained>.fromOpaque(op).takeRetainedValue().takeStored()
 		}
 		// handles a cap pointer from the c library
 		func scenarioCap(_ op:UnsafeRawPointer) -> Swift.Error {
-			let um = Unmanaged<ContainedError>.fromOpaque(op)
-			return um.takeUnretainedValue().takeError()
+			return Unmanaged<ContainedError>.fromOpaque(op).takeUnretainedValue().takeError()
 		}
 
 		var cptr:_cwskit_optr_t? = nil
 
 		// consume the next item without blocking
-		switch _cwskit_dc_consume(&fifo, false, &cptr) {
+		switch _cwskit_dc_consume_nonblocking(&fifo, &cptr) {
 			case -1: // would block - try again in a continuation if the task is not currently cancelled
-				return try await withUnsafeThrowingContinuation({ (cont:UnsafeContinuation<T?, Swift.Error>) in
-					switch _cwskit_dc_consume(&fifo, true, &cptr) {
-						case -1:
-							fatalError("_cwskit_dc_consume returned -1 twice in a row")
-						case 0:
-							return cont.resume(returning:scenarioFIFO(cptr!))
-						case 1:
-							switch cptr {
-								case .some(let ptr):
-									return cont.resume(throwing:scenarioCap(ptr))
-								case .none:
-									return cont.resume(returning:nil)
-							}
-						default:
-							fatalError("unknown return code from _cwskit_dc_consume")
-					}
-				})
+				return .wouldBlock
 			case 0: // normal fifo - we are responsible for releasing the memory
 				switch cptr {
 					case .some(let ptr):
-						return scenarioFIFO(ptr)
+						return .fifo(scenarioFIFO(ptr))
 					case .none:
 						fatalError("_cwskit_dc_consume returned a normal fifo exit code but nil ptr was encountered")
 				}
 			case 1: // the chain is capped. in this case, we do not release the error from memory - the capper item is released on deinit
 				switch cptr {
 					case .some(let ptr): // the chain was capped with a pointer, this is an error
-						throw scenarioCap(ptr)
+						return .cappedError(scenarioCap(ptr))
 					case .none: // the chain was capped with a nil pointer, this is a normal exit
-						return nil
+						return .cappedNil
 				}
 			default:
 				// no code should ever take us here

@@ -1,5 +1,6 @@
 import NIO
 import Logging
+import WebCore
 
 extension Client {
 	
@@ -30,18 +31,21 @@ extension Client {
 
 		// variables that are configured by the implementers of this class.
 		/// handles text messages that are received from the remote peer.
-		private var textStream:AsyncStream<String>.Continuation? = nil
+		private let textStream:AsyncStream2<String>
 		/// handles binary messages that are received from the remote peer.
-		private var binaryStream:AsyncStream<[UInt8]>.Continuation? = nil
+		private let binaryStream:AsyncStream2<[UInt8]>
 		/// handles latency measurements that are received from the remote peer.
-		private var latencyStream:AsyncStream<MeasuredLatency>.Continuation? = nil
+		private let latencyStream:AsyncStream2<MeasuredLatency>
 
-		internal init(log:Logger?) {
+		internal init(log:Logger?, textStream:AsyncStream2<String>, binaryStream:AsyncStream2<[UInt8]>, latencyStream:AsyncStream2<MeasuredLatency>) {
 			var modLogger = log
 			if log != nil {
 				modLogger![metadataKey:"type"] = "Client.Capper"
 			}
 			self.logger = modLogger
+			self.textStream = textStream
+			self.binaryStream = binaryStream
+			self.latencyStream = latencyStream
 		}
 
 		/// **WARNING**: this function MUST be called on the same event loop that this handler is running on.
@@ -50,24 +54,6 @@ extension Client {
 			self.logger?.trace("registered closure handler")
 		}
 
-		/// **WARNING**: this function MUST be called on the same event loop that this handler is running on.
-		internal func registerTextStreamContinuation(_ textStream:AsyncStream<String>.Continuation) {
-			self.textStream = textStream
-			self.logger?.trace("registered text stream continuation")
-		}
-
-		/// **WARNING**: this function MUST be called on the same event loop that this handler is running on.
-		internal func registerBinaryStreamContinuation(_ binaryStream:AsyncStream<[UInt8]>.Continuation) {
-			self.binaryStream = binaryStream
-			self.logger?.trace("registered binary stream continuation")
-		}
-
-		/// **WARNING**: this function MUST be called on the same event loop that this handler is running on.
-		internal func registerLatencyStreamContinuation(_ latencyStream:AsyncStream<MeasuredLatency>.Continuation) {
-			self.latencyStream = latencyStream
-			self.logger?.trace("registered latency stream continuation")
-		}
-		
 		/// called when the handler is added to the pipeline.
 		internal func handlerAdded(context:ChannelHandlerContext) {
 			self.logger?.trace("handler added")
@@ -90,21 +76,9 @@ extension Client {
 		internal func handlerRemoved(context:ChannelHandlerContext) {
 			self.logger?.trace("handler removed")
 			// handle each of the three async
-			if textStream != nil {
-				self.logger?.trace("finishing registered text stream")
-				textStream!.finish()
-			}
-			if binaryStream != nil {
-				self.logger?.trace("finishing registered binary stream")
-				binaryStream!.finish()
-			}
-			if latencyStream != nil {
-				self.logger?.trace("finishing registered latency stream")
-				latencyStream!.finish()
-			}
-			textStream = nil
-			binaryStream = nil
-			latencyStream = nil
+			self.textStream.finish()
+			self.binaryStream.finish()
+			self.latencyStream.finish()
 		}
 
 		public func channelRead(context:ChannelHandlerContext, data:NIOAny) {
@@ -112,41 +86,21 @@ extension Client {
 			switch frame {
 				case .text(let text):
 					self.logger?.debug("got text message", metadata:["byte_count":"\(text.count)"])
-					if textStream != nil {
-						self.logger?.trace("yielding text message to registered stream")
-						self.textStream!.yield(text)
-					} else {
-						self.logger?.warning("no registered text stream, dropping message")
-					}
+					self.textStream.yield(text)
 				case .data(let data):
 					self.logger?.debug("got binary message", metadata:["byte_count":"\(data.count)"])
-					if binaryStream != nil {
-						self.logger?.trace("yielding binary message to registered stream")
-						self.binaryStream!.yield(data)
-					} else {
-						self.logger?.warning("no registered binary stream, dropping message")
-					}
+					self.binaryStream.yield(data)
 				case .unsolicitedPong(let sig):
 					self.logger?.debug("got unsolicited pong from system", metadata:["signature":"\(sig)"])
 					break;
 				case .solicitedPong(let responseTime, let sig):
 					self.logger?.debug("measured \(responseTime)s latency to remote peer", metadata:["signature":"\(sig)", "latency_type":"their_pong_rx"])
-					if latencyStream != nil {
-						self.logger?.trace("yielding latency measurement to registered stream")
-						self.latencyStream!.yield(MeasuredLatency.remoteResponseTime(responseTime))
-					} else {
-						self.logger?.trace("no registered latency stream, dropping measurement")
-					}
+					self.latencyStream.yield(MeasuredLatency.remoteResponseTime(responseTime))
 				case .ping(let future):
 					self.logger?.debug("got ping from remote peer")
 					future.whenSuccess { responseTime in
 						self.logger?.info("measured \(responseTime)s latency to remote peer", metadata:["latency_type":"our_pong_tx"])
-						if self.latencyStream != nil {
-							self.logger?.trace("yielding latency measurement to registered stream")
-							self.latencyStream!.yield(MeasuredLatency.ourWriteTime(responseTime))
-						} else {
-							self.logger?.trace("no registered latency stream, dropping measurement")
-						}
+						self.latencyStream.yield(MeasuredLatency.ourWriteTime(responseTime))
 					}
 				case .gracefulDisconnect(_, _, let future):
 					self.logger?.notice("got graceful disconnect from remote peer. initiating close")

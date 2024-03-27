@@ -23,23 +23,6 @@ _cwskit_datachainpair_t _cwskit_dc_init() {
 	return chain;
 }
 
-bool _cwskit_can_issue_continuation(const _cwskit_datachainpair_deploy_guarantees_ptr_t deploys) {
-	if (atomic_load_explicit(&deploys->is_continuation_issued, memory_order_acquire) == false) {
-		atomic_store_explicit(&deploys->is_continuation_issued, true, memory_order_release);
-		return true;
-	} else {
-		return false;
-	}
-}
-bool _cwskit_can_issue_consumer(const _cwskit_datachainpair_deploy_guarantees_ptr_t deploys) {
-	if (atomic_load_explicit(&deploys->is_consumer_issued, memory_order_acquire) == false) {
-		atomic_store_explicit(&deploys->is_consumer_issued, true, memory_order_release);
-		return true;
-	} else {
-		return false;
-	}
-}
-
 _cwskit_optr_t _cwskit_dc_close(const _cwskit_datachainpair_ptr_t chain, const _cwskit_datachainlink_ptr_consume_f deallocator_f) {
 	// load the base entry.
 	_cwskit_datachainlink_ptr_t current = atomic_load_explicit(&chain->base, memory_order_acquire);
@@ -122,6 +105,7 @@ void _cwskit_dc_pass(const _cwskit_datachainpair_ptr_t chain, const _cwskit_ptr_
 	};
 	const _cwskit_datachainlink_ptr_t link_on_heap = memcpy(malloc(sizeof(link_on_stack)), &link_on_stack, sizeof(link_on_stack));
 	bool current = false;
+	pthread_mutex_lock(&chain->mutex);
 	do {
 		current = _cwskit_dc_pass_link(chain, link_on_heap);
 	} while (__builtin_expect(current == false, false));
@@ -130,6 +114,7 @@ void _cwskit_dc_pass(const _cwskit_datachainpair_ptr_t chain, const _cwskit_ptr_
 		atomic_fetch_add_explicit(&chain->element_count, 1, memory_order_acq_rel);
 		pthread_cond_signal(&chain->cond);
 	}
+	pthread_mutex_unlock(&chain->mutex);
 }
 
 /// internal function that flushes a single writerchain entry.
@@ -163,49 +148,35 @@ bool _cwskit_dc_consume_next(_cwskit_datachainlink_ptr_t preloaded_atomic_base, 
 	return false;
 }
 
-/// @return 0 if the operation was successful and a normal fifo element was consumed. 1 if the operation resulted in the cap element being returned. -1 if the operation would block.
-int8_t _cwskit_dc_consume(const _cwskit_datachainpair_ptr_t chain, const bool try_blocking, _cwskit_optr_t*_Nonnull consumed_ptr) {
+void _cwskit_dc_block_thread(const _cwskit_datachainpair_ptr_t chain) {
+	// block until a new element is available or the chain is capped.
+	uint64_t element_count;
+	bool is_capped;
+	pthread_mutex_lock(&chain->mutex);
+	while (atomic_load_explicit(&chain->_is_capped, memory_order_acquire) == false && atomic_load_explicit(&chain->element_count, memory_order_acquire) == 0) {
+		// block for condition
+		pthread_cond_wait(&chain->cond, &chain->mutex);
+	}
+	pthread_mutex_unlock(&chain->mutex);
+}
 
-	// attempt to consume the next element while there are elements waiting in the chain.
-	while (atomic_load_explicit(&chain->element_count, memory_order_acquire) > 0) {
+/// @return 0 if the operation was successful and a normal fifo element was consumed. 1 if the operation resulted in the cap element being returned. -1 if the operation would block.
+int8_t _cwskit_dc_consume_nonblocking(const _cwskit_datachainpair_ptr_t chain, _cwskit_optr_t*_Nonnull consumed_ptr) {
+	uint64_t element_count = atomic_load_explicit(&chain->element_count, memory_order_acquire);
+	do {
 		// attempt to consume the next entry in the chain.
 		if (_cwskit_dc_consume_next(atomic_load_explicit(&chain->base, memory_order_acquire), chain, consumed_ptr)) {
 			return 0; // normal fifo element
 		}
-	}
+		element_count = atomic_load_explicit(&chain->element_count, memory_order_acquire);
+	} while (element_count > 0);
 
 	// there are no more fifo elements to consume.
 	
 	// check if the chain is capped.
-	bool is_capped = atomic_load_explicit(&chain->_is_capped, memory_order_acquire);
-	if (__builtin_expect(is_capped == false, true)){
-		// the chain is not capped. we can try and block if the user has requested it.
-		if (try_blocking) {
-
-			// block until a new element is available or the chain is capped.
-			pthread_mutex_lock(&chain->mutex);
-			bool next_result;
-			do {
-				// block for condition
-				pthread_cond_wait(&chain->cond, &chain->mutex);
-
-				// acquire all variables to evaluate conditions.
-				next_result = _cwskit_dc_consume_next(atomic_load_explicit(&chain->base, memory_order_acquire), chain, consumed_ptr);
-				is_capped = atomic_load_explicit(&chain->_is_capped, memory_order_acquire);
-			} while (next_result == false && is_capped == false); 
-			pthread_mutex_unlock(&chain->mutex);
-			
-			// at this point, either _cwskit_dc_consume_next was successful, or the chain is capped.
-			
-			if (is_capped == true) {
-				*consumed_ptr = atomic_load_explicit(&chain->_cap_ptr, memory_order_acquire);
-				return 1; // cap element
-			} else {
-				return 0; // normal fifo element
-			}
-		} else {
-			return -1; // would block
-		}
+	if (__builtin_expect(atomic_load_explicit(&chain->_is_capped, memory_order_acquire) == false, true)){
+		// no items and chain is NOT capped.
+		return -1; // would block
 	} else {
 		// the chain is capped. return the cap pointer.
 		*consumed_ptr = atomic_load_explicit(&chain->_cap_ptr, memory_order_acquire);

@@ -4,6 +4,7 @@
 #include "cwskit_types.h"
 #include <sys/types.h>
 #include <stdint.h>
+#include <pthread.h>
 
 /// forward declaration of the atomiclist structure. represents a single element in the atomic list.
 struct _cwskit_atomiclist_keyed;
@@ -34,6 +35,8 @@ typedef struct _cwskit_atomiclistpair_keyed {
 	_Atomic size_t element_count;
 	/// an internal value that increments with each new item added. this essentially represents the "next item's key"
 	_Atomic uint64_t _id_increment_internal;
+	/// the mutex that is used to keep the atomiclist in a consistent state
+	pthread_mutex_t mutex;
 } _cwskit_atomiclistpair_keyed_t;
 
 /// defines a non-null pointer to an atomic list pair.

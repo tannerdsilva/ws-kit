@@ -56,57 +56,21 @@ public final actor Client:Sendable {
 	// - the various continuations that this client will use to send data to the user.
 	
 	/// the continuation that will be used to send text data to the user.
-	fileprivate var textContinuation:AsyncStream<String>.Continuation? = nil
-	/// get the current text continuation.
-	public func getTextContinuation() -> AsyncStream<String>.Continuation? {
-		return self.textContinuation
-	}
-	/// set the current text continuation.
-	public func setTextContinuation(_ continuation:AsyncStream<String>.Continuation?) {
-		self.textContinuation = continuation
-	}
-
+	fileprivate let textStream:AsyncStream2<String> = AsyncStream2<String>()
 	/// the continuation that will be used to send binary data to the user.
-	fileprivate var binaryContinuation:AsyncStream<[UInt8]>.Continuation? = nil
-	/// get the current binary continuation.
-	public func getBinaryContinuation() -> AsyncStream<[UInt8]>.Continuation? {
-		return self.binaryContinuation
-	}
-	/// set the current binary continuation.
-	public func setBinaryContinuation(_ continuation:AsyncStream<[UInt8]>.Continuation?) {
-		self.binaryContinuation = continuation
-	}
-
+	fileprivate let binaryStream:AsyncStream2<[UInt8]> = AsyncStream2<[UInt8]>()
 	/// the continuation that will be used to send latency data to the user (latency as measured by ping and pong messages)
-	fileprivate var latencyContinuation:AsyncStream<MeasuredLatency>.Continuation? = nil
-	/// get the current latency continuation.
-	public func getLatencyContinuation() -> AsyncStream<MeasuredLatency>.Continuation? {
-		return self.latencyContinuation
-	}
-	/// set the current latency continuation.
-	public func setLatencyContinuation(_ continuation:AsyncStream<MeasuredLatency>.Continuation?) {
-		self.latencyContinuation = continuation
-	}
-	
+	fileprivate let latencyStream:AsyncStream2<MeasuredLatency> = AsyncStream2<MeasuredLatency>()
 	/// the continuation that will be used to send connection stage data to the user.
-	fileprivate var stateContinuation:AsyncStream<State>.Continuation? = nil
-	/// get the current state continuation
-	public func getStateContinuation() -> AsyncStream<State>.Continuation? {
-		return self.stateContinuation
-	}
-	/// set the current latency continuation
-	public func setStateContinuation(_ continuation:AsyncStream<State>.Continuation?) {
-		self.stateContinuation = continuation
-	}
+	fileprivate let stateStream:AsyncStream2<State> = AsyncStream2<State>()
+
 	/// the current state of this client.
 	fileprivate var disconnectionWaiters:[UnsafeContinuation<Void, Swift.Error>] = []
+
 	fileprivate var currentState:State = .initialized {
 		// automatically yield the new stage value to the continuation.
 		didSet {
-			if self.stateContinuation != nil {
-				self.logger?.trace("yielding async connection state: \(currentState)")
-				self.stateContinuation!.yield(currentState)
-			}
+			self.stateStream.yield(currentState)
 		}
 	}
 	fileprivate func disconnectionEvent(result:Result<Void, Swift.Error>) {
@@ -116,19 +80,10 @@ public final actor Client:Sendable {
 		for waiter in self.disconnectionWaiters {
 			waiter.resume(with:result)
 		}
-		// any continuations if they exist
-		if self.stateContinuation != nil {
-			self.stateContinuation!.finish()
-		}
-		if self.latencyContinuation != nil {
-			self.latencyContinuation!.finish()
-		}
-		if self.binaryContinuation != nil {
-			self.binaryContinuation!.finish()
-		}
-		if self.textContinuation != nil {
-			self.textContinuation!.finish()
-		}
+		self.stateStream.finish()
+		self.latencyStream.finish()
+		self.binaryStream.finish()
+		self.textStream.finish()
 	}
 	
 	/// the work that must be done when the client successfully 
@@ -165,23 +120,13 @@ public final actor Client:Sendable {
 		// first, we much connect to the remote peer
 		let (c, _) = try await Client.protoboot(log:useLogger, url:url, headers:[:], configuration:configuration, on:eventLoop, handlerBuilder: { logger, pipeline in
 			// this is where we need to build the data pipeline for this network connection. the base interface here is the Message type.
-			let makeCapper = Capper(log:logger)
+			let makeCapper = Capper(log:logger, textStream:self.textStream, binaryStream:self.binaryStream, latencyStream:self.latencyStream)
 			
 			makeCapper.registerClosureHandler({ closureResult in
 				Task.detached {
 					await self.disconnectionEvent(result:closureResult)
 				}
 			})
-
-			if self.textContinuation != nil {
-				makeCapper.registerTextStreamContinuation(self.textContinuation!)
-			}
-			if self.binaryContinuation != nil {
-				makeCapper.registerBinaryStreamContinuation(self.binaryContinuation!)
-			}
-			if self.latencyContinuation != nil {
-				makeCapper.registerLatencyStreamContinuation(self.latencyContinuation!)
-			}
 			pipeline.append(makeCapper)
 			return makeCapper
 		})

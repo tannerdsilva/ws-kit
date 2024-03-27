@@ -44,24 +44,6 @@ typedef struct _cwskit_datachainpair {
 	pthread_mutex_t mutex;
 } _cwskit_datachainpair_t;
 
-// this is a struct that helps guard against improper deployment of continuations and consumers. this is optional and as such, is detached from the main datachain structure.
-typedef struct _cwskit_datachainpair_deploy_guarantees {
-	/// atomic boolean flag indicating whether a continuation has been issued for the chain.
-	_Atomic bool is_continuation_issued;
-	/// atomic boolean flag indicating whether a consumer has been issued for the chain.
-	_Atomic bool is_consumer_issued;
-} _cwskit_datachainpair_deploy_guarantees_t;
-
-typedef _cwskit_datachainpair_deploy_guarantees_t*_Nonnull _cwskit_datachainpair_deploy_guarantees_ptr_t;
-
-/// a function that should be called before a continuation is issued to the chain.
-/// @return true if a continuation can be issued; false if a continuation is already issued.
-bool _cwskit_can_issue_continuation(const _cwskit_datachainpair_deploy_guarantees_ptr_t deploys);
-
-/// a function that should be called before a consumer is issued to the chain.
-/// @return true if a consumer can be issued; false if a consumer is already issued.
-bool _cwskit_can_issue_consumer(const _cwskit_datachainpair_deploy_guarantees_ptr_t deploys);
-
 /// defines a non-null pointer to a datachain pair structure, facilitating operations on the entire chain.
 typedef _cwskit_datachainpair_t*_Nonnull _cwskit_datachainpair_ptr_t;
 
@@ -90,11 +72,13 @@ bool _cwskit_dc_pass_cap(const _cwskit_datachainpair_ptr_t chain, const _cwskit_
 /// @param ptr data pointer to be stored in the chain.
 void _cwskit_dc_pass(const _cwskit_datachainpair_ptr_t chain, const _cwskit_ptr_t ptr);
 
+/// blocks the current thread until a new fifo item is available or the chain becomes capped.
+void _cwskit_dc_block_thread(const _cwskit_datachainpair_ptr_t chain);
+
 /// returns the next item in the chain. if no items are remaining and the chain is capped, the cap pointer will be returned (not for consumption, leave in memory). if no items are remaining and the chain is not capped, the function will block until an item is available (if specified by argument).
 /// @param chain pointer to the datachain to consume from.
-/// @param try_blocking boolean value indicating whether to attempt and block the current thread if no data is available. the function is guaranteed to not block if this value is false.
 /// @param consumed_ptr pointer to the consumed data pointer, if any.
-/// @return 0 if the function was successful and `consumed_ptr` was assigned to the next fifo entry to consume (consider this the last time you'll see this pointer - deallocate apropriately); -1 if the function would block and the try_blocking argument was false. 1 if the datachain was capped and the cap pointer was returned (not for consumption).
-int8_t _cwskit_dc_consume(const _cwskit_datachainpair_ptr_t chain, const bool try_blocking, _cwskit_optr_t*_Nonnull consumed_ptr);
+/// @return 0 if the function was successful and `consumed_ptr` was assigned to the next fifo entry to consume (consider this the last time you'll see this pointer - deallocate apropriately); -1 if the function would block
+int8_t _cwskit_dc_consume_nonblocking(const _cwskit_datachainpair_ptr_t chain, _cwskit_optr_t*_Nonnull consumed_ptr);
 
 #endif // _WSKIT_DATACHAIN_H

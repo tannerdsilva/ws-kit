@@ -1,5 +1,6 @@
 #include "cwskit_datachain_keyed.h"
 #include "cwskit_types.h"
+#include <pthread/pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -9,11 +10,13 @@
 #include <sys/types.h>
 
 _cwskit_atomiclistpair_keyed_t _cwskit_al_init_keyed() {
-	return (_cwskit_atomiclistpair_keyed_t){
+	_cwskit_atomiclistpair_keyed_t newVar = {
 		.base = NULL,
 		.element_count = 0,
 		._id_increment_internal = 0,
 	};
+	pthread_mutex_init(&newVar.mutex, NULL);
+	return newVar;
 }
 
 void _cwskit_al_close_keyed(const _cwskit_atomiclistpair_keyed_ptr_t list, const _cwskit_atomiclist_consumer_keyed_ptr_f consumer_f) {
@@ -25,6 +28,7 @@ void _cwskit_al_close_keyed(const _cwskit_atomiclistpair_keyed_ptr_t list, const
 		free(current);
 		current = next;
 	}
+	pthread_mutex_destroy(&list->mutex);
 }
 
 /// internal function. returns the next key that should be used for a new element in the atomic list. assumes that the returned key will be used, as such, this function steps the internal key counter for the next call.
@@ -93,8 +97,9 @@ uint64_t _cwskit_al_insert(const _cwskit_atomiclistpair_keyed_ptr_t list, const 
 	// while (true) {}
 	// copy the stack memory to heap memory, and insert the heap memory into the atomic list.
     const _cwskit_atomiclist_keyed_ptr_t link_on_heap = memcpy(malloc(sizeof(link_on_stack)), &link_on_stack, sizeof(link_on_stack));
+	pthread_mutex_lock(&list->mutex);
    	while (__builtin_expect(_cwskit_al_insert_internal(list, link_on_heap) == false, false)) {}
-	// while (true) {}
+	pthread_mutex_unlock(&list->mutex);
 	return new_id_internal;
 }
 
@@ -132,10 +137,11 @@ int8_t _cwskit_al_remove_try(_cwskit_atomiclist_keyed_aptr_t*_Nonnull base, cons
 _cwskit_optr_t _cwskit_al_remove(const _cwskit_atomiclistpair_keyed_ptr_t list, const uint64_t key) {
 	_cwskit_ptr_t retval;
 	int8_t result;
+	pthread_mutex_lock(&list->mutex);
 	do {
 		result = _cwskit_al_remove_try(&list->base, key, &retval);
 	} while (__builtin_expect(result == -1, false));
-
+	pthread_mutex_unlock(&list->mutex);
 	if (result == 1) {
 		atomic_fetch_sub_explicit(&list->element_count, 1, memory_order_acq_rel);
 		return (_cwskit_optr_t)retval;
@@ -146,9 +152,11 @@ _cwskit_optr_t _cwskit_al_remove(const _cwskit_atomiclistpair_keyed_ptr_t list, 
 
 void _cwskit_al_iterate(const _cwskit_atomiclistpair_keyed_ptr_t list, const _cwskit_atomiclist_consumer_keyed_ptr_f consumer_f) {
 	// the list is not being modified. iterate through the list.
+	pthread_mutex_lock(&list->mutex);
 	_cwskit_atomiclist_keyed_ptr_t current = atomic_load_explicit(&list->base, memory_order_acquire);
 	while (current != NULL) {
 		consumer_f(current->key, current->ptr);
 		current = atomic_load_explicit(&current->next, memory_order_acquire);
 	}
+	pthread_mutex_unlock(&list->mutex);
 }
