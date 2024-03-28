@@ -1,12 +1,11 @@
 #include "cwskit_datachain.h"
 #include "cwskit_types.h"
-#include <pthread/pthread.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <sys/_pthread/_pthread_cond_t.h>
 
 /// internal function that initializes a chain pair.
 /// - parameters:

@@ -3,7 +3,7 @@ import cweb
 public struct AsyncStream<T>:AsyncSequence {
 	public typealias Element = T
 	public final class AsyncIterator:AsyncIteratorProtocol {
-		public borrowing func next() async throws -> T? {
+		public func next() async throws -> T? {
 			return try await fifo.next()
 		}
 
@@ -28,19 +28,19 @@ public struct AsyncStream<T>:AsyncSequence {
 
 	public init() {}
 
-	public borrowing func yield(_ data:consuming T) {
+	public func yield(_ data:T) {
 		al.forEach({ _, continuation in
 			continuation.push(data)
 		})
 	}
 
-	public borrowing func finish() {
+	public func finish() {
 		al.forEach({ _, continuation in
 			continuation.finish()
 		})
 	}
 
-	public borrowing func finish(throwing:Swift.Error) {
+	public func finish(throwing:Swift.Error) {
 		al.forEach({ _, continuation in
 			continuation.finish(throwing:throwing)
 		})
@@ -59,25 +59,29 @@ internal final class AtomicList<T>:@unchecked Sendable {
 
 	private final class Contained {
 		private let store:T
-		internal init(store:consuming T) {
+		internal init(store:T) {
 			self.store = store
 		}
-		internal consuming func takeStored() -> T {
+		internal func takeStored() -> T {
 			return store
 		}
 	}
 
-	internal borrowing func forEach(_ body:@escaping (UInt64, T) -> Void) {
+	internal func forEach(_ body:@escaping (UInt64, T) -> Void) {
 		_cwskit_al_iterate(&list_store, { key, ptr in
-			body(key, Unmanaged<Contained>.fromOpaque(ptr).takeUnretainedValue().takeStored())
+			let um = Unmanaged<Contained>.fromOpaque(ptr).retain()
+			defer {
+				um.release()
+			}
+			body(key, um.takeUnretainedValue().takeStored())
 		})
 	}
 
-	internal borrowing func insert(_ data:consuming T) -> UInt64 {
+	internal func insert(_ data:T) -> UInt64 {
 		return _cwskit_al_insert(&list_store, Unmanaged.passRetained(Contained(store:data)).toOpaque())
 	}
 
-	@discardableResult internal borrowing func remove(_ key:UInt64) -> T? {
+	@discardableResult internal func remove(_ key:UInt64) -> T? {
 		switch (_cwskit_al_remove(&list_store, key)) {
 			case .some(let contained):
 				return Unmanaged<Contained>.fromOpaque(contained).takeRetainedValue().takeStored()
@@ -91,7 +95,7 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 	#if DEBUG
 	private var deployInfo = _cwskit_datachainpair_deploy_guarantees_t()
 	#endif
-	public borrowing func makeAsyncIterator() -> AsyncIterator {
+	public func makeAsyncIterator() -> AsyncIterator {
 		#if DEBUG
 		guard _cwskit_can_issue_consumer(&deployInfo) == true else {
 			fatalError("fifo class cannot have multiple consumers")
@@ -100,7 +104,7 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 		return AsyncIterator(dataSequence:copy self)
 	}
 
-	public borrowing func makeContinuation() -> Continuation {
+	public func makeContinuation() -> Continuation {
 		#if DEBUG
 		guard _cwskit_can_issue_continuation(&deployInfo) == true else {
 			fatalError("fifo class cannot have multiple producers")
@@ -111,10 +115,10 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 
 	public struct AsyncIterator:AsyncIteratorProtocol {
 		private let dataSequence:FIFO<T>
-		internal init(dataSequence:consuming FIFO<T>) {
+		internal init(dataSequence:FIFO<T>) {
 			self.dataSequence = dataSequence
 		}
-		public borrowing func next() async throws -> T? {
+		public func next() async throws -> T? {
 			repeat {
 				switch dataSequence._pop_internal_sync() {
 					case .cappedError(let error):
@@ -135,16 +139,16 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 
 	public struct Continuation {
 		private let dataSequence:FIFO<T>
-		internal init(dataSequence:consuming FIFO<T>) {
+		internal init(dataSequence:FIFO<T>) {
 			self.dataSequence = dataSequence
 		}
-		public borrowing func push(_ data:consuming T) {
+		public func push(_ data:T) {
 			dataSequence.push(data)
 		}
-		public borrowing func finish() {
+		public func finish() {
 			dataSequence.finish()
 		}
-		public borrowing func finish(throwing:Swift.Error) {
+		public func finish(throwing:Swift.Error) {
 			dataSequence.finish(throwing:throwing)
 		}
 	} 
@@ -154,24 +158,24 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 	private var fifo = _cwskit_dc_init()
 	private final class Contained {
 		private let store:T
-		internal init(store:consuming T) {
+		internal init(store:T) {
 			self.store = store
 		}
-		internal consuming func takeStored() -> T {
+		internal func takeStored() -> T {
 			return store
 		}
 	}
 	private final class ContainedError {
 		private let storedError:Swift.Error
-		internal init(_ err:consuming Swift.Error) {
+		internal init(_ err:Swift.Error) {
 			self.storedError = err
 		}
-		internal consuming func takeError() -> Swift.Error {
+		internal func takeError() -> Swift.Error {
 			return storedError
 		}
 	}
 
-	internal borrowing func push(_ data:consuming T) {
+	internal func push(_ data:T) {
 		_cwskit_dc_pass(&fifo, Unmanaged.passRetained(Contained(store:data)).toOpaque())
 	}
 
@@ -181,14 +185,22 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 		case cappedError(Swift.Error)
 		case cappedNil
 	}
-	private borrowing func _pop_internal_sync() -> _pop_internal_sync_result {
+	private func _pop_internal_sync() -> _pop_internal_sync_result {
 		// handles a fifo pointer from the c library
 		func scenarioFIFO(_ op:UnsafeRawPointer) -> T {
-			return Unmanaged<Contained>.fromOpaque(op).takeRetainedValue().takeStored()
+			let op = Unmanaged<Contained>.fromOpaque(op)
+			defer {
+				op.release()
+			}
+			return op.takeUnretainedValue().takeStored()
 		}
 		// handles a cap pointer from the c library
 		func scenarioCap(_ op:UnsafeRawPointer) -> Swift.Error {
-			return Unmanaged<ContainedError>.fromOpaque(op).takeUnretainedValue().takeError()
+			let op = Unmanaged<ContainedError>.fromOpaque(op).retain()
+			defer {
+				op.release()
+			}
+			return op.takeUnretainedValue().takeError()
 		}
 
 		var cptr:_cwskit_optr_t? = nil
@@ -217,7 +229,7 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 		}
 	}
 
-	internal borrowing func finish(throwing:Swift.Error) {
+	internal func finish(throwing:Swift.Error) {
 		// unbalanced retain on the error - it is released in deinit
 		let um = Unmanaged.passRetained(ContainedError(throwing))
 		guard _cwskit_dc_pass_cap(&fifo, um.toOpaque()) == true else {
@@ -226,7 +238,7 @@ public final class FIFO<T>:AsyncSequence, @unchecked Sendable {
 		}
 	}
 
-	internal borrowing func finish() {
+	internal func finish() {
 		// no need to account for success here since the passed pointer is nil
 		_ = _cwskit_dc_pass_cap(&fifo, nil)
 	}

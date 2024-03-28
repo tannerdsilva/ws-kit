@@ -1,6 +1,6 @@
 #include "cwskit_datachain_keyed.h"
 #include "cwskit_types.h"
-#include <pthread/pthread.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>

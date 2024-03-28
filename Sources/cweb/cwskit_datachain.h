@@ -2,7 +2,6 @@
 #define _WSKIT_DATACHAIN_H
 
 #include "cwskit_types.h"
-#include <sys/_pthread/_pthread_mutex_t.h>
 #include <sys/types.h>
 #include <pthread.h>
 
